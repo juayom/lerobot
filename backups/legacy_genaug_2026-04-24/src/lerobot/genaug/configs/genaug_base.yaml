@@ -1,0 +1,19 @@
+pipeline:
+  validate_alignment: true
+  rebuild_to_video: true
+  export_image_format: png
+
+augmentation:
+  mode: material_only
+  seed_base: 1000
+
+validation:
+  fail_on_duplicated_pairs: true
+  fail_on_missing_required_values: true
+  fail_on_multiple_episode_mapping: true
+  fail_on_inconsistent_frame_index: true
+  fail_on_inconsistent_timestamp: true
+  fail_on_missing_cameras: true
+  fail_on_extra_cameras: true
+  fail_on_partial_episodes: true
+  fail_on_missing_image_paths: true

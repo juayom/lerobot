@@ -1,0 +1,19 @@
+{
+  "root": "/home/capstone/.cache/huggingface/lerobot/yoohoolala/newdepth07",
+  "episode_index": 0,
+  "frames_processed": 76,
+  "manifest_path": "/home/capstone/jua/lerobot/capstone/genaug/output/yoohoolala_newdepth07/episode-000000-target-manifest.parquet",
+  "best_frame": {
+    "frame_index": 74,
+    "global_index": 74,
+    "red_pixels": 454,
+    "overlay_path": "/home/capstone/jua/lerobot/capstone/genaug/output/yoohoolala_newdepth07/overlays/episode-000000/frame-000074.png",
+    "depth_preview_path": "/home/capstone/jua/lerobot/capstone/genaug/output/yoohoolala_newdepth07/previews/episode-000000/frame-000074.png",
+    "depth_clean_path": "/home/capstone/jua/lerobot/capstone/genaug/output/yoohoolala_newdepth07/observation.images.intel_depth/episode-000000/frame-000074.png"
+  },
+  "red_pixel_stats": {
+    "max": 454,
+    "median": 414.0,
+    "nonzero_frames": 76
+  }
+}

@@ -1,0 +1,44 @@
+dataset:
+  image_key: observation.images.rgb
+  depth_key: observation.images.depth
+  action_key: action
+  task_key: task
+
+recording:
+  camera: realsense
+  fps: 30
+  width: 640
+  height: 480
+  depth_unit: meter
+  align_depth_to_rgb: true
+
+genaug:
+  dry_run: true
+  num_aug_per_frame: 3
+  modes:
+    - background
+    - object_texture
+  preserve_action: true
+  preserve_depth: true
+  seed: 42
+  use_controlnet_depth: false
+  model_id: null
+
+prompts:
+  background:
+    - a tabletop scene in a kitchen
+    - a tabletop scene in a study room
+    - a tabletop scene in a garage
+    - a tabletop scene on a wooden desk
+  object_texture:
+    - a red plastic object
+    - a blue ceramic object
+    - a metallic object
+    - a wooden object
+
+safety_checks:
+  check_action_equal: true
+  check_task_equal: true
+  check_rgbd_shape: true
+  save_alignment_preview: true
+  max_failed_samples: 100

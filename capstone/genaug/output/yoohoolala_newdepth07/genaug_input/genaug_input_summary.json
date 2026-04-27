@@ -1,0 +1,6 @@
+{
+  "source_manifest": "/home/capstone/jua/lerobot/capstone/genaug/output/yoohoolala_newdepth07/episode-000000-target-manifest.parquet",
+  "output_root": "/home/capstone/jua/lerobot/capstone/genaug/output/yoohoolala_newdepth07/genaug_input",
+  "frames_generated": 76,
+  "manifest_path": "/home/capstone/jua/lerobot/capstone/genaug/output/yoohoolala_newdepth07/genaug_input/genaug_input_manifest.parquet"
+}

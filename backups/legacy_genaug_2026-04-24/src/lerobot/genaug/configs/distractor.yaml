@@ -1,0 +1,4 @@
+augmentation:
+  mode: combined
+checks:
+  collision_check: required
