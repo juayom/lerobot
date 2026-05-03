@@ -56,6 +56,9 @@ def build_and_save(rgb: np.ndarray, depth: np.ndarray, valid_mask: np.ndarray | 
     save_image(out_dir / "object_edit_mask_box.png", result.object_edit_mask_box)
     save_image(out_dir / "overlay_instances.png", draw_candidate_boxes(result.rgb, result.candidate_list))
     save_image(out_dir / "overlay_background_mask.png", overlay_mask(result.rgb, result.background_edit_mask, (0, 255, 255)))
+    save_image(out_dir / "overlay_valid_mask.png", result.extra_masks["overlay_valid_mask"])
+    save_image(out_dir / "overlay_threshold_candidates.png", result.extra_masks["overlay_threshold_candidates"])
+    save_image(out_dir / "overlay_raw_foreground.png", result.extra_masks["overlay_raw_foreground"])
 
     debug_panel = make_debug_panel(
         [

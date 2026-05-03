@@ -19,6 +19,14 @@ DEFAULT_QUANTILE = 35.0
 DEFAULT_ABS_THRESHOLD_M: float | None = None
 MAX_FOREGROUND_AREA_RATIO = 0.40
 MIN_FOREGROUND_AREA_RATIO = 0.003
+VALID_DEPTH_MIN_M = 0.25
+VALID_DEPTH_MAX_M = 2.50
+ROI_X_RANGE = (0.20, 0.80)
+ROI_Y_RANGE = (0.18, 0.88)
+ROI_NEAR_PERCENTILE = 12.0
+ROI_UPPER_PERCENTILE = 38.0
+DEPTH_BAND_BELOW_M = 0.03
+DEPTH_BAND_ABOVE_M = 0.12
 
 
 @dataclass
@@ -58,6 +66,14 @@ class MaskDiagnostics:
     candidate_count: int = 0
     fallback_split_used: bool = False
     semantic_label_verified: bool = False
+    rgb_shape: list[int] = field(default_factory=list)
+    depth_shape: list[int] = field(default_factory=list)
+    valid_mask_shape: list[int] = field(default_factory=list)
+    threshold_candidate_centroid_xy: list[float] = field(default_factory=list)
+    threshold_candidate_bbox_xywh: list[int] = field(default_factory=list)
+    threshold_candidate_area: int = 0
+    raw_foreground_centroid_xy: list[float] = field(default_factory=list)
+    raw_foreground_bbox_xywh: list[int] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -107,11 +123,27 @@ def _to_mask_u8(mask: np.ndarray) -> np.ndarray:
     return (mask > 0).astype(np.uint8) * 255
 
 
+def _central_table_roi_mask(shape: tuple[int, int]) -> np.ndarray:
+    h, w = shape
+    x0 = int(w * ROI_X_RANGE[0])
+    x1 = int(w * ROI_X_RANGE[1])
+    y0 = int(h * ROI_Y_RANGE[0])
+    y1 = int(h * ROI_Y_RANGE[1])
+    roi = np.zeros((h, w), dtype=np.uint8)
+    roi[y0:y1, x0:x1] = 255
+    return roi
+
+
 def compute_valid_depth_mask(depth: np.ndarray, valid_mask: np.ndarray | None = None) -> np.ndarray:
     depth_m = sanitize_depth(depth)[..., 0]
-    computed = np.isfinite(depth_m) & (depth_m > 0)
+    computed = np.isfinite(depth_m) & (depth_m >= VALID_DEPTH_MIN_M) & (depth_m <= VALID_DEPTH_MAX_M)
     if valid_mask is not None:
         computed &= _to_mask_u8(valid_mask) > 0
+    h, w = depth_m.shape[:2]
+    computed[:BORDER_GUARD_PX, :] = False
+    computed[max(0, h - BORDER_GUARD_PX):, :] = False
+    computed[:, :BORDER_GUARD_PX] = False
+    computed[:, max(0, w - BORDER_GUARD_PX):] = False
     return computed.astype(np.uint8) * 255
 
 
@@ -119,8 +151,10 @@ def _apply_border_guard(mask: np.ndarray, valid_mask: np.ndarray, border_guard_p
     guarded = mask.copy()
     h, w = mask.shape
     invalid = valid_mask == 0
-    guarded[:, max(0, w - border_guard_px):] = 0
+    guarded[:border_guard_px, :] = 0
     guarded[max(0, h - border_guard_px):, :] = 0
+    guarded[:, :border_guard_px] = 0
+    guarded[:, max(0, w - border_guard_px):] = 0
     guarded[invalid] = 0
     return guarded
 
@@ -136,17 +170,23 @@ def extract_depth_foreground(
 ) -> tuple[np.ndarray, np.ndarray, float, list[dict[str, Any]], np.ndarray]:
     depth_m = sanitize_depth(depth)[..., 0]
     valid = _to_mask_u8(valid_mask) > 0
-    valid_depth = depth_m[valid]
-    if valid_depth.size == 0:
+    roi_mask = _central_table_roi_mask(depth_m.shape)
+    roi_valid = valid & (roi_mask > 0)
+    roi_depth = depth_m[roi_valid]
+    if roi_depth.size == 0:
         empty = np.zeros_like(valid_mask, dtype=np.uint8)
         return empty, empty, 0.0, [], np.zeros((*empty.shape, 3), dtype=np.uint8)
 
-    threshold = float(np.percentile(valid_depth, quantile))
+    near_ref = float(np.percentile(roi_depth, ROI_NEAR_PERCENTILE))
+    upper_ref = float(np.percentile(roi_depth, ROI_UPPER_PERCENTILE))
+    lower_band = max(VALID_DEPTH_MIN_M, near_ref - DEPTH_BAND_BELOW_M)
+    upper_band = min(upper_ref, near_ref + DEPTH_BAND_ABOVE_M)
     if abs_threshold_m is not None:
-        threshold = min(threshold, float(abs_threshold_m))
+        upper_band = min(upper_band, float(abs_threshold_m))
+    threshold = upper_band
 
     raw = np.zeros_like(valid_mask, dtype=np.uint8)
-    raw[(depth_m > 0) & (depth_m <= threshold) & valid] = 255
+    raw[(depth_m >= lower_band) & (depth_m <= upper_band) & roi_valid] = 255
     raw = _apply_border_guard(raw, _to_mask_u8(valid_mask), border_guard_px)
 
     kernel = np.ones((MORPH_KERNEL, MORPH_KERNEL), dtype=np.uint8)
@@ -416,6 +456,19 @@ def _overlay_mask(rgb: np.ndarray, mask: np.ndarray, color: tuple[int, int, int]
     return cv2.addWeighted(rgb, 0.7, out, 0.3, 0)
 
 
+def _mask_geometry(mask: np.ndarray) -> tuple[list[float], list[int], int]:
+    mask_u8 = _to_mask_u8(mask)
+    ys, xs = np.where(mask_u8 > 0)
+    if ys.size == 0:
+        return [], [], 0
+    x0, x1 = int(xs.min()), int(xs.max())
+    y0, y1 = int(ys.min()), int(ys.max())
+    centroid = [float(xs.mean()), float(ys.mean())]
+    bbox = [x0, y0, int(x1 - x0 + 1), int(y1 - y0 + 1)]
+    area = int(ys.size)
+    return centroid, bbox, area
+
+
 def build_rgbd_object_masks(
     rgb: np.ndarray,
     depth: np.ndarray,
@@ -428,12 +481,25 @@ def build_rgbd_object_masks(
     rgb_u8 = _to_uint8_rgb(rgb)
     depth_m = sanitize_depth(depth)[..., 0]
     valid_depth_mask = compute_valid_depth_mask(depth, valid_mask)
+    rgb_hw = list(rgb_u8.shape[:2])
+    depth_hw = list(depth_m.shape[:2])
+    valid_hw = list(valid_depth_mask.shape[:2])
+    if not (tuple(rgb_hw) == tuple(depth_hw) == tuple(valid_hw)):
+        raise ValueError(
+            f"Shape mismatch in build_rgbd_object_masks: rgb={rgb_u8.shape}, depth={depth_m.shape}, valid_mask={valid_depth_mask.shape}"
+        )
     raw_fg, cleaned_fg, threshold_m, component_stats, components_rgb = extract_depth_foreground(
         depth,
         valid_depth_mask,
         quantile=quantile,
         abs_threshold_m=abs_threshold_m,
     )
+    threshold_candidates = np.zeros_like(valid_depth_mask, dtype=np.uint8)
+    roi_mask = _central_table_roi_mask(depth_m.shape)
+    lower_threshold = max(VALID_DEPTH_MIN_M, threshold_m - DEPTH_BAND_ABOVE_M)
+    threshold_candidates[(depth_m >= lower_threshold) & (depth_m <= threshold_m) & (_to_mask_u8(valid_depth_mask) > 0) & (roi_mask > 0)] = 255
+    threshold_candidate_centroid_xy, threshold_candidate_bbox_xywh, threshold_candidate_area = _mask_geometry(threshold_candidates)
+    raw_foreground_centroid_xy, raw_foreground_bbox_xywh, _raw_fg_area = _mask_geometry(raw_fg)
     candidates = score_candidates(rgb_u8, depth_m, cleaned_fg, valid_depth_mask)
 
     bottle_mask, box_mask, split_success, split_conf, split_reason, extra, fallback_split_used = split_instances(
@@ -499,10 +565,21 @@ def build_rgbd_object_masks(
         bottle_confidence=float(bottle_conf),
         box_confidence=float(box_conf),
         failure_reason=failure_reason,
-        notes=notes,
+        notes=notes + [
+            f"valid_depth_band=[{VALID_DEPTH_MIN_M:.2f},{VALID_DEPTH_MAX_M:.2f}]m",
+            f"roi=({ROI_X_RANGE[0]:.2f}-{ROI_X_RANGE[1]:.2f}, {ROI_Y_RANGE[0]:.2f}-{ROI_Y_RANGE[1]:.2f})",
+        ],
         candidate_count=len(candidates),
         fallback_split_used=bool(fallback_split_used),
         semantic_label_verified=semantic_label_verified,
+        rgb_shape=rgb_hw,
+        depth_shape=depth_hw,
+        valid_mask_shape=valid_hw,
+        threshold_candidate_centroid_xy=threshold_candidate_centroid_xy,
+        threshold_candidate_bbox_xywh=threshold_candidate_bbox_xywh,
+        threshold_candidate_area=threshold_candidate_area,
+        raw_foreground_centroid_xy=raw_foreground_centroid_xy,
+        raw_foreground_bbox_xywh=raw_foreground_bbox_xywh,
     )
 
     split_labels = {
@@ -511,6 +588,9 @@ def build_rgbd_object_masks(
     }
 
     extra_masks = {
+        "overlay_valid_mask": _overlay_mask(rgb_u8, valid_depth_mask, (0, 255, 0)),
+        "overlay_threshold_candidates": _overlay_mask(rgb_u8, threshold_candidates, (255, 128, 0)),
+        "overlay_raw_foreground": _overlay_mask(rgb_u8, raw_fg, (255, 0, 0)),
         "overlay_bottle": _overlay_mask(rgb_u8, bottle_mask, (255, 0, 255)),
         "overlay_box": _overlay_mask(rgb_u8, box_mask, (255, 255, 0)),
         "overlay_background": _overlay_mask(rgb_u8, background_edit_mask, (0, 255, 255)),

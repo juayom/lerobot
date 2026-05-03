@@ -158,6 +158,9 @@ def main() -> None:
         save_image(frame_dir / "object_edit_mask_box.png", result.object_edit_mask_box)
         save_image(frame_dir / "overlay_instances.png", result.extra_masks["overlay_bottle"])
         save_image(frame_dir / "overlay_background_mask.png", result.extra_masks["overlay_background"])
+        save_image(frame_dir / "overlay_valid_mask.png", result.extra_masks["overlay_valid_mask"])
+        save_image(frame_dir / "overlay_threshold_candidates.png", result.extra_masks["overlay_threshold_candidates"])
+        save_image(frame_dir / "overlay_raw_foreground.png", result.extra_masks["overlay_raw_foreground"])
 
         mode = modes[idx % len(modes)]
         failure_reason = result.diagnostics.failure_reason
