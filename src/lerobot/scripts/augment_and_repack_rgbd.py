@@ -160,12 +160,16 @@ def main() -> None:
         save_image(frame_dir / "overlay_background_mask.png", result.extra_masks["overlay_background"])
 
         mode = modes[idx % len(modes)]
-        if not result.diagnostics.split_success and mode in {MODE_BOTTLE, MODE_BOX}:
+        failure_reason = result.diagnostics.failure_reason
+        semantic_ok = bool(result.diagnostics.semantic_label_verified)
+        if mode in {MODE_BOTTLE, MODE_BOX} and not semantic_ok:
             fallback_mode = MODE_BACKGROUND
-            failure_reason = result.diagnostics.failure_reason or "split_failed"
+            failure_reason = failure_reason or "semantic_label_unverified"
+        elif not result.diagnostics.split_success and mode in {MODE_BOTTLE, MODE_BOX}:
+            fallback_mode = MODE_BACKGROUND
+            failure_reason = failure_reason or "split_failed"
         else:
             fallback_mode = mode
-            failure_reason = result.diagnostics.failure_reason
 
         aug_rgb, aug_meta = _apply_mode(result.rgb, result, fallback_mode)
         rgb_path = frame_dir / f"aug_{args.image_key.replace('.', '_')}.png"
@@ -191,6 +195,7 @@ def main() -> None:
             "task": meta["task"],
             "requested_mode": mode,
             "applied_mode": fallback_mode,
+            "semantic_gate_passed": semantic_ok,
             "augmentation_metadata": aug_meta,
             "failure_reason": failure_reason,
         })

@@ -56,6 +56,8 @@ class MaskDiagnostics:
     failure_reason: str
     notes: list[str] = field(default_factory=list)
     candidate_count: int = 0
+    fallback_split_used: bool = False
+    semantic_label_verified: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -241,23 +243,27 @@ def score_candidates(
         depth_edge = float(depth_edges[region].mean() / 255.0)
         center_bias = 1.0 - min(abs(centroid_x - center_x) / center_x, 1.0)
 
+        narrow_width_prior = 1.0 - min(bw / max(w * 0.28, 1.0), 1.0)
+        lower_region_prior = centroid_y / max(h, 1)
+        wide_bbox_prior = min((bw / max(bh, 1)) / 3.0, 1.2)
+        base_like_prior = min(extent / 0.72, 1.2)
         bottle_score = (
-            0.30 * min(aspect / 2.5, 1.5)
-            + 0.20 * vertical_position
-            + 0.20 * center_bias
-            + 0.15 * depth_edge
-            + 0.15 * color_edge
+            0.34 * min(aspect / 2.8, 1.4)
+            + 0.24 * vertical_position
+            + 0.22 * center_bias
+            + 0.14 * narrow_width_prior
+            + 0.06 * depth_edge
         )
         box_score = (
-            0.25 * min((bw / max(bh, 1)) / 2.5, 1.5)
-            + 0.25 * (centroid_y / max(h, 1))
-            + 0.20 * center_bias
-            + 0.15 * extent
-            + 0.15 * color_edge
+            0.30 * lower_region_prior
+            + 0.28 * wide_bbox_prior
+            + 0.22 * base_like_prior
+            + 0.12 * center_bias
+            + 0.08 * color_edge
         )
         if touch_right or touch_bottom:
-            bottle_score -= 0.35
-            box_score -= 0.35
+            bottle_score -= 0.60
+            box_score -= 0.60
 
         candidates.append(
             CandidateStats(
@@ -347,7 +353,7 @@ def split_instances(
     depth_m: np.ndarray,
     cleaned_foreground_mask: np.ndarray,
     candidates: list[CandidateStats],
-) -> tuple[np.ndarray, np.ndarray, bool, float, str, dict[str, np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray, bool, float, str, dict[str, np.ndarray], bool]:
     if len(candidates) >= 2:
         by_bottle = max(candidates, key=lambda c: c.bottle_score)
         remaining = [c for c in candidates if c.label != by_bottle.label]
@@ -357,7 +363,7 @@ def split_instances(
             bottle_mask = (labels == by_bottle.label).astype(np.uint8) * 255
             box_mask = (labels == by_box.label).astype(np.uint8) * 255
             conf = min(1.0, 0.5 + 0.25 * abs(by_bottle.bottle_score - by_box.bottle_score) + 0.25)
-            return bottle_mask, box_mask, True, float(conf), "component_assignment", {}
+            return bottle_mask, box_mask, True, float(conf), "component_assignment", {}, False
 
     total_mask = _to_mask_u8(cleaned_foreground_mask)
     waters_mask, ws_conf, ws_reason = _split_component_watershed(rgb, total_mask)
@@ -366,7 +372,7 @@ def split_instances(
     if ws_conf <= 0 and color_conf <= 0:
         return np.zeros_like(total_mask), np.zeros_like(total_mask), False, 0.0, f"split_failed:{ws_reason}|{color_reason}", {
             "watershed_mask": waters_mask,
-        }
+        }, True
 
     labels = []
     if color_masks:
@@ -382,7 +388,7 @@ def split_instances(
     if len(labels) < 2:
         return np.zeros_like(total_mask), np.zeros_like(total_mask), False, max(ws_conf, color_conf), "split_regions_lt_2", {
             "watershed_mask": waters_mask,
-        }
+        }, True
 
     scored = []
     h = total_mask.shape[0]
@@ -400,7 +406,7 @@ def split_instances(
     split_conf = float(min(1.0, 0.40 + max(ws_conf, color_conf)))
     return bottle_mask, box_mask, True, split_conf, "fallback_split", {
         "watershed_mask": waters_mask,
-    }
+    }, True
 
 
 def _overlay_mask(rgb: np.ndarray, mask: np.ndarray, color: tuple[int, int, int]) -> np.ndarray:
@@ -430,7 +436,7 @@ def build_rgbd_object_masks(
     )
     candidates = score_candidates(rgb_u8, depth_m, cleaned_fg, valid_depth_mask)
 
-    bottle_mask, box_mask, split_success, split_conf, split_reason, extra = split_instances(
+    bottle_mask, box_mask, split_success, split_conf, split_reason, extra, fallback_split_used = split_instances(
         rgb_u8,
         depth_m,
         cleaned_fg,
@@ -477,6 +483,9 @@ def build_rgbd_object_masks(
     if 0 < selected_component_area / float(combined.size) < MIN_FOREGROUND_AREA_RATIO:
         notes.append("Foreground unusually small; check threshold.")
 
+    semantic_label_verified = bool(len(candidates) >= 2 and split_success)
+    if len(candidates) == 0 and split_success:
+        notes.append("semantic labels derived from fallback split only")
     diagnostics = MaskDiagnostics(
         frame_index=frame_index,
         valid_ratio=valid_ratio,
@@ -492,6 +501,8 @@ def build_rgbd_object_masks(
         failure_reason=failure_reason,
         notes=notes,
         candidate_count=len(candidates),
+        fallback_split_used=bool(fallback_split_used),
+        semantic_label_verified=semantic_label_verified,
     )
 
     split_labels = {
