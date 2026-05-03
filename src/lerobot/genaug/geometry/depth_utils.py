@@ -12,13 +12,15 @@ def sanitize_depth(depth: np.ndarray, *, depth_unit: str = "meter") -> np.ndarra
     depth = np.asarray(depth)
     if depth.ndim == 3 and depth.shape[-1] == 1:
         depth = depth[..., 0]
-    if depth.dtype == np.uint16:
-        if depth_unit == "meter":
-            depth = depth.astype(np.float32) / 1000.0
+    depth = depth.astype(np.float32)
+    if depth_unit == "meter":
+        if np.issubdtype(np.asarray(depth).dtype, np.integer):
+            depth = depth / 1000.0
         else:
-            depth = depth.astype(np.float32)
-    else:
-        depth = depth.astype(np.float32)
+            valid = depth[np.isfinite(depth) & (depth > 0)]
+            if valid.size > 0 and float(np.median(valid)) > 20.0:
+                # Heuristic for depth maps decoded from gray16 videos into float arrays that still carry millimeter values.
+                depth = depth / 1000.0
     depth[~np.isfinite(depth)] = 0.0
     depth[depth < 0] = 0.0
     return depth[..., None]

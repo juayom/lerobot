@@ -10,6 +10,7 @@ import numpy as np
 from lerobot.genaug.checks.alignment import validate_before_after
 from lerobot.genaug.geometry.depth_utils import sanitize_depth
 from lerobot.genaug.geometry.mask_utils import make_background_mask
+from lerobot.genaug.geometry.object_mask import apply_background_swap, estimate_object_mask_from_depth
 from lerobot.genaug.layout import from_hwc_image, to_hwc_depth, to_hwc_image
 
 LOGGER = logging.getLogger(__name__)
@@ -52,13 +53,16 @@ class GenAugEngine:
         prompts = self.config.prompts.get(mode) or [f"genaug mode: {mode}"]
         return prompts[0]
 
-    def augment_image_with_depth(self, image, depth, mask, prompt, seed):
+    def augment_image_with_depth(self, image, depth, mask, prompt, seed, mode):
         image_hwc, image_layout = to_hwc_image(image)
         depth_hwc, _depth_layout = to_hwc_depth(depth)
         depth_np = sanitize_depth(depth_hwc)
-        _ = depth_np, mask, prompt, seed
+        _ = depth_np, prompt
 
         if self.config.dry_run:
+            if mode == "background":
+                object_mask = np.where(np.asarray(mask) > 0, 0, 255).astype(np.uint8)
+                return from_hwc_image(apply_background_swap(image_hwc, object_mask, seed=seed), image_layout)
             return from_hwc_image(image_hwc, image_layout)
 
         if self.config.model_id is None:
@@ -86,8 +90,9 @@ class GenAugEngine:
         depth = np.asarray(sample[self.config.depth_key])
         image_hwc, _image_layout = to_hwc_image(image)
         depth_hwc, depth_layout = to_hwc_depth(depth)
-        mask = make_background_mask(image_hwc)
-        augmented[self.config.image_key] = self.augment_image_with_depth(image, depth, mask, prompt, seed)
+        object_mask, diagnostics = estimate_object_mask_from_depth(depth_hwc)
+        mask = make_background_mask(image_hwc, object_mask=object_mask)
+        augmented[self.config.image_key] = self.augment_image_with_depth(image, depth, mask, prompt, seed, mode)
         augmented[self.config.depth_key] = np.asarray(sample[self.config.depth_key]).copy()
 
         augmented["genaug.source_episode_index"] = np.array([
