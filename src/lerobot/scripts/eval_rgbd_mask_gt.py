@@ -13,8 +13,9 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from lerobot.datasets.genaug_rgbd_masks import RGBDMaskResult, build_rgbd_object_masks
+from lerobot.datasets.genaug_rgbd_masks import build_rgbd_object_masks
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.rgbd_object_aug import predict_masks_for_method
 from lerobot.genaug.geometry.depth_utils import sanitize_depth
 
 LOGGER = logging.getLogger(__name__)
@@ -86,59 +87,6 @@ def _sample_from_dataset(dataset: LeRobotDataset, frame_index: int) -> dict[str,
     raise IndexError(f"Could not find dataset sample for frame_index={frame_index}")
 
 
-def _grabcut_from_seeds(rgb: np.ndarray, sure_fg: np.ndarray, likely_fg: np.ndarray, sure_bg: np.ndarray, iterations: int = 5) -> np.ndarray:
-    h, w = rgb.shape[:2]
-    mask = np.full((h, w), cv2.GC_PR_BGD, dtype=np.uint8)
-    mask[sure_bg > 0] = cv2.GC_BGD
-    mask[likely_fg > 0] = cv2.GC_PR_FGD
-    mask[sure_fg > 0] = cv2.GC_FGD
-
-    ys, xs = np.where((sure_fg > 0) | (likely_fg > 0))
-    if ys.size == 0:
-        return np.zeros((h, w), dtype=np.uint8)
-    x0 = max(0, int(xs.min()) - 20)
-    y0 = max(0, int(ys.min()) - 20)
-    x1 = min(w, int(xs.max()) + 21)
-    y1 = min(h, int(ys.max()) + 21)
-    rect = (x0, y0, max(1, x1 - x0), max(1, y1 - y0))
-    bgd = np.zeros((1, 65), np.float64)
-    fgd = np.zeros((1, 65), np.float64)
-    try:
-        cv2.grabCut(rgb, mask, rect, bgd, fgd, iterations, cv2.GC_INIT_WITH_MASK)
-    except cv2.error as exc:
-        LOGGER.warning("GrabCut failed, returning likely_fg only: %s", exc)
-        return (likely_fg > 0).astype(np.uint8) * 255
-    out = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
-    return out
-
-
-def _predict_masks(result: RGBDMaskResult, rgb: np.ndarray, method: str) -> dict[str, np.ndarray]:
-    if method == "heuristic":
-        bottle = result.extra_masks.get("bottle_candidate_mask", np.zeros_like(result.cleaned_foreground_mask))
-        box = result.extra_masks.get("box_candidate_mask", np.zeros_like(result.cleaned_foreground_mask))
-        foreground = result.cleaned_foreground_mask
-        return {
-            "bottle": bottle,
-            "box": box,
-            "foreground": foreground,
-        }
-    if method == "grabcut":
-        sure_bg = cv2.bitwise_not(result.valid_depth_mask)
-        likely_fg = result.extra_masks.get("table_removed_mask", result.cleaned_foreground_mask)
-        bottle_seed = result.extra_masks.get("bottle_candidate_mask", np.zeros_like(result.cleaned_foreground_mask))
-        box_seed = result.extra_masks.get("box_candidate_mask", np.zeros_like(result.cleaned_foreground_mask))
-        bottle = _grabcut_from_seeds(rgb, bottle_seed, cv2.dilate(bottle_seed, np.ones((11, 11), np.uint8), iterations=1), sure_bg)
-        box = _grabcut_from_seeds(rgb, box_seed, cv2.dilate(box_seed, np.ones((11, 11), np.uint8), iterations=1), sure_bg)
-        box = cv2.subtract(box, cv2.dilate(bottle, np.ones((7, 7), np.uint8), iterations=1))
-        foreground = cv2.bitwise_or(bottle, box)
-        foreground = cv2.bitwise_or(foreground, likely_fg)
-        foreground = cv2.bitwise_and(foreground, result.valid_depth_mask)
-        return {
-            "bottle": bottle,
-            "box": box,
-            "foreground": foreground,
-        }
-    raise ValueError(f"Unsupported method: {method}")
 
 
 def _classify_failure(preds: dict[str, np.ndarray], gt_bottle: np.ndarray | None, gt_box: np.ndarray | None, gt_foreground: np.ndarray | None) -> list[str]:
@@ -244,7 +192,7 @@ def main() -> None:
             gt_foreground = cv2.bitwise_or(gt_bottle, gt_box)
 
         for method in methods:
-            preds = _predict_masks(result, rgb, method)
+            preds = predict_masks_for_method(result, rgb, method)
             row = FrameEval(
                 frame_name=frame_dir.name,
                 frame_index=frame_index,

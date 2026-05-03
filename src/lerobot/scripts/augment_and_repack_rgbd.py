@@ -12,8 +12,16 @@ import pandas as pd
 from PIL import Image
 
 from lerobot.datasets.augmented_dataset_builder import build_augmented_image_dataset
-from lerobot.datasets.genaug_rgbd_masks import RGBDMaskResult, build_rgbd_object_masks
+from lerobot.datasets.genaug_rgbd_masks import build_rgbd_object_masks
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.rgbd_object_aug import (
+    EvalThresholds,
+    apply_aug_with_masks,
+    choose_best_method,
+    load_eval_summary,
+    object_aug_allowed,
+    predict_masks_for_method,
+)
 from lerobot.genaug.geometry.depth_utils import sanitize_depth
 from lerobot.utils.mask_debug_utils import save_image
 
@@ -50,31 +58,10 @@ def _save_depth_png(path: Path, depth_m: np.ndarray) -> None:
     Image.fromarray(mm).save(path)
 
 
-def _apply_mode(rgb: np.ndarray, result: RGBDMaskResult, mode: str) -> tuple[np.ndarray, dict[str, Any]]:
-    rgb = rgb.copy()
-    meta: dict[str, Any] = {"edited_region": mode, "depth_preserved": True, "stub": False}
-    if mode == MODE_BOTTLE:
-        mask = result.object_edit_mask_bottle > 0
-        tint = np.array([255, 70, 220], dtype=np.uint8)
-        rgb[mask] = ((0.55 * rgb[mask]) + (0.45 * tint)).astype(np.uint8)
-    elif mode == MODE_BOX:
-        mask = result.object_edit_mask_box > 0
-        tint = np.array([255, 220, 60], dtype=np.uint8)
-        rgb[mask] = ((0.55 * rgb[mask]) + (0.45 * tint)).astype(np.uint8)
-    elif mode == MODE_BACKGROUND:
-        mask = result.background_edit_mask > 0
-        yy, xx = np.indices(mask.shape)
-        stripes = (((xx // 32) + (yy // 32)) % 2).astype(np.uint8)
-        bg = np.zeros_like(rgb)
-        bg[stripes == 0] = np.array([55, 110, 180], dtype=np.uint8)
-        bg[stripes == 1] = np.array([210, 235, 90], dtype=np.uint8)
-        rgb[mask] = bg[mask]
-    elif mode == MODE_DISTRACTOR:
-        meta["stub"] = True
-        meta["notes"] = "Region proposal only; no actual distractor synthesis applied."
-    else:
-        raise ValueError(f"Unsupported mode: {mode}")
-    return rgb, meta
+def _apply_mode(rgb: np.ndarray, masks: dict[str, np.ndarray], mode: str) -> tuple[np.ndarray, dict[str, Any]]:
+    if mode == MODE_DISTRACTOR:
+        return rgb.copy(), {"edited_region": mode, "depth_preserved": True, "stub": True, "notes": "Region proposal only; no actual distractor synthesis applied."}
+    return apply_aug_with_masks(rgb, masks, mode)
 
 
 def _extract_paths(dataset: LeRobotDataset, idx: int, image_key: str, depth_key: str, out_dir: Path) -> tuple[Path, Path, Path, dict[str, Any]]:
@@ -106,6 +93,14 @@ def main() -> None:
     parser.add_argument("--max-frames", type=int, default=200)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--artifacts-dir", default=None)
+    parser.add_argument("--eval-summary-json", default=None)
+    parser.add_argument("--bottle-mean-min", type=float, default=0.35)
+    parser.add_argument("--box-mean-min", type=float, default=0.30)
+    parser.add_argument("--foreground-mean-min", type=float, default=0.60)
+    parser.add_argument("--bottle-median-min", type=float, default=0.30)
+    parser.add_argument("--box-median-min", type=float, default=0.25)
+    parser.add_argument("--foreground-median-min", type=float, default=0.60)
+    parser.add_argument("--preview-frames", type=int, default=5)
     parser.add_argument("--tolerance-s", type=float, default=0.001)
     args = parser.parse_args()
 
@@ -116,6 +111,18 @@ def main() -> None:
     modes = [m.strip() for m in args.modes.split(",") if m.strip()]
     manifest_rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
+    thresholds = EvalThresholds(
+        bottle_mean_min=args.bottle_mean_min,
+        box_mean_min=args.box_mean_min,
+        foreground_mean_min=args.foreground_mean_min,
+        bottle_median_min=args.bottle_median_min,
+        box_median_min=args.box_median_min,
+        foreground_median_min=args.foreground_median_min,
+    )
+    eval_summary = load_eval_summary(args.eval_summary_json)
+    method_decision = choose_best_method(eval_summary, thresholds)
+    chosen_method = method_decision.chosen_method or 'heuristic'
+    preview_root = artifacts_dir / 'preview_frames'
 
     selected_indices: list[int] = []
     running_frames = 0
@@ -168,17 +175,15 @@ def main() -> None:
 
         mode = modes[idx % len(modes)]
         failure_reason = result.diagnostics.failure_reason
-        semantic_ok = bool(result.diagnostics.semantic_label_verified)
-        if mode in {MODE_BOTTLE, MODE_BOX} and not semantic_ok:
+        masks = predict_masks_for_method(result, result.rgb, chosen_method)
+        allowed, gate_reason = object_aug_allowed(result, method_decision, mode)
+        if mode in {MODE_BOTTLE, MODE_BOX} and not allowed:
             fallback_mode = MODE_BACKGROUND
-            failure_reason = failure_reason or "semantic_label_unverified"
-        elif not result.diagnostics.split_success and mode in {MODE_BOTTLE, MODE_BOX}:
-            fallback_mode = MODE_BACKGROUND
-            failure_reason = failure_reason or "split_failed"
+            failure_reason = failure_reason or gate_reason
         else:
             fallback_mode = mode
 
-        aug_rgb, aug_meta = _apply_mode(result.rgb, result, fallback_mode)
+        aug_rgb, aug_meta = _apply_mode(result.rgb, masks, fallback_mode)
         rgb_path = frame_dir / f"aug_{args.image_key.replace('.', '_')}.png"
         depth_path = frame_dir / f"aug_{args.depth_key.replace('.', '_')}.png"
         _save_rgb(rgb_path, aug_rgb)
@@ -202,12 +207,33 @@ def main() -> None:
             "task": meta["task"],
             "requested_mode": mode,
             "applied_mode": fallback_mode,
-            "semantic_gate_passed": semantic_ok,
+            "chosen_mask_method": chosen_method,
+            "eval_gate_passed": method_decision.passed,
+            "semantic_gate_passed": bool(result.diagnostics.semantic_label_verified),
             "augmentation_metadata": aug_meta,
             "failure_reason": failure_reason,
         })
         (frame_dir / "diagnostics.json").write_text(json.dumps(diag, ensure_ascii=False, indent=2))
         summary_rows.append(diag)
+
+        if len(summary_rows) <= args.preview_frames:
+            preview_dir = preview_root / f"frame_{meta['frame_index']:06d}"
+            preview_dir.mkdir(parents=True, exist_ok=True)
+            _save_rgb(preview_dir / 'original.png', result.rgb)
+            bottle_preview, bottle_meta = _apply_mode(result.rgb, masks, MODE_BOTTLE if object_aug_allowed(result, method_decision, MODE_BOTTLE)[0] else MODE_BACKGROUND)
+            box_preview, box_meta = _apply_mode(result.rgb, masks, MODE_BOX if object_aug_allowed(result, method_decision, MODE_BOX)[0] else MODE_BACKGROUND)
+            background_preview, background_meta = _apply_mode(result.rgb, masks, MODE_BACKGROUND)
+            _save_rgb(preview_dir / 'bottle_edit_preview.png', bottle_preview)
+            _save_rgb(preview_dir / 'box_edit_preview.png', box_preview)
+            _save_rgb(preview_dir / 'background_edit_preview.png', background_preview)
+            (preview_dir / 'preview_meta.json').write_text(json.dumps({
+                'frame_index': meta['frame_index'],
+                'chosen_mask_method': chosen_method,
+                'eval_gate_passed': method_decision.passed,
+                'bottle_preview_mode': bottle_meta['edited_region'],
+                'box_preview_mode': box_meta['edited_region'],
+                'background_preview_mode': background_meta['edited_region'],
+            }, ensure_ascii=False, indent=2))
 
     manifest_path = artifacts_dir / "manifest.parquet"
     pd.DataFrame(manifest_rows).to_parquet(manifest_path, index=False)
