@@ -388,66 +388,135 @@ def _split_component_color(depth_m: np.ndarray, rgb: np.ndarray, component_mask:
     return masks, conf, "ok"
 
 
+def _largest_component(mask: np.ndarray) -> np.ndarray:
+    mask_u8 = _to_mask_u8(mask)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask_u8, connectivity=8)
+    if n <= 1:
+        return np.zeros_like(mask_u8)
+    best = max(range(1, n), key=lambda i: int(stats[i, cv2.CC_STAT_AREA]))
+    return (labels == best).astype(np.uint8) * 255
+
+
+def _best_vertical_seed(mask: np.ndarray) -> np.ndarray:
+    opened = cv2.morphologyEx(_to_mask_u8(mask), cv2.MORPH_OPEN, np.ones((9, 41), dtype=np.uint8))
+    n, labels, stats, centroids = cv2.connectedComponentsWithStats(opened, connectivity=8)
+    if n <= 1:
+        return np.zeros_like(opened)
+    h, w = opened.shape
+    cx = w / 2.0
+    best_label = 0
+    best_score = -1e18
+    for i in range(1, n):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area < 800:
+            continue
+        x = int(stats[i, cv2.CC_STAT_LEFT])
+        y = int(stats[i, cv2.CC_STAT_TOP])
+        bw = int(stats[i, cv2.CC_STAT_WIDTH])
+        bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+        aspect = bh / max(bw, 1)
+        centroid_x = float(centroids[i][0])
+        centroid_y = float(centroids[i][1])
+        center_bias = 1.0 - min(abs(centroid_x - cx) / cx, 1.0)
+        upper_bias = 1.0 - (centroid_y / max(h, 1))
+        narrow_bias = 1.0 - min(bw / max(w * 0.18, 1.0), 1.0)
+        score = 0.35 * min(aspect / 2.0, 1.5) + 0.30 * upper_bias + 0.20 * center_bias + 0.15 * narrow_bias
+        if score > best_score:
+            best_score = score
+            best_label = i
+    if best_label == 0:
+        return np.zeros_like(opened)
+    return (labels == best_label).astype(np.uint8) * 255
+
+
+def _extract_refined_instances(cleaned_foreground_mask: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, bool, str]:
+    raw = _to_mask_u8(cleaned_foreground_mask)
+    if cv2.countNonZero(raw) == 0:
+        z = np.zeros_like(raw)
+        return z, z, z, z, z, 0.0, False, "empty_foreground"
+
+    vertical_seed = _best_vertical_seed(raw)
+    if cv2.countNonZero(vertical_seed) == 0:
+        z = np.zeros_like(raw)
+        return z, z, z, z, z, 0.0, False, "no_vertical_seed"
+
+    table_removed = cv2.bitwise_and(raw, cv2.dilate(vertical_seed, np.ones((31, 61), dtype=np.uint8), iterations=1))
+    table_removed = _largest_component(table_removed)
+
+    seed_pts = np.column_stack(np.where(vertical_seed > 0)[::-1])
+    vx, vy, vw, vh = cv2.boundingRect(seed_pts)
+    bottle_candidate = vertical_seed.copy()
+    cutoff_y = vy + int(0.74 * vh)
+    bottle_candidate[cutoff_y:, :] = 0
+    bottle_candidate = _largest_component(bottle_candidate)
+    if cv2.countNonZero(bottle_candidate) == 0:
+        bottle_candidate = _largest_component(vertical_seed)
+
+    dilated_bottle = cv2.dilate(bottle_candidate, np.ones((19, 19), dtype=np.uint8), iterations=1)
+    support_zone = table_removed.copy()
+    support_zone[: max(0, vy + int(0.35 * vh)), :] = 0
+    x0 = max(0, vx - max(24, int(0.7 * vw)))
+    x1 = min(raw.shape[1], vx + vw + max(24, int(0.7 * vw)))
+    support_zone[:, :x0] = 0
+    support_zone[:, x1:] = 0
+    support_zone = cv2.subtract(support_zone, dilated_bottle)
+    box_candidate = _largest_component(support_zone)
+
+    bottle_centroid, bottle_bbox, bottle_area = _mask_geometry(bottle_candidate)
+    box_centroid, box_bbox, box_area = _mask_geometry(box_candidate)
+    _table_centroid, table_bbox, _table_area = _mask_geometry(table_removed)
+
+    semantic_ok = False
+    confidence = 0.0
+    reason = "semantic_checks_failed"
+    if bottle_bbox and box_bbox:
+        bw, bh = bottle_bbox[2], bottle_bbox[3]
+        xw, xh = box_bbox[2], box_bbox[3]
+        bottle_aspect = bh / max(bw, 1)
+        box_aspect = xh / max(xw, 1)
+        bottle_upper = bottle_centroid[1] < box_centroid[1]
+        bottle_narrow = bw < (max(72, int(0.28 * table_bbox[2])) if table_bbox else 90)
+        box_not_table = xw < (max(180, int(0.62 * table_bbox[2])) if table_bbox else 220)
+        box_below = box_centroid[1] > bottle_centroid[1] + 12
+        box_local = abs(box_centroid[0] - bottle_centroid[0]) < max(90, int(1.4 * bw))
+        semantic_ok = bool(
+            bottle_area > 1200 and box_area > 900 and bottle_aspect > 1.45 and bottle_upper and bottle_narrow
+            and box_below and box_local and box_not_table and box_aspect < 1.25
+        )
+        confidence = float(min(1.0, 0.18 * bottle_aspect + 0.16 * float(bottle_upper) + 0.16 * float(bottle_narrow) + 0.16 * float(box_below) + 0.16 * float(box_local) + 0.18 * float(box_not_table)))
+        if semantic_ok:
+            reason = "refined_vertical_support_split"
+        elif not box_not_table:
+            reason = "box_candidate_too_wide_table_like"
+        elif not bottle_narrow:
+            reason = "bottle_candidate_not_narrow_enough"
+        elif not box_below:
+            reason = "box_candidate_not_below_bottle"
+
+    if not semantic_ok:
+        final_bottle = np.zeros_like(raw)
+        final_box = np.zeros_like(raw)
+    else:
+        final_bottle = bottle_candidate
+        final_box = box_candidate
+
+    return final_bottle, final_box, table_removed, bottle_candidate, box_candidate, confidence, semantic_ok, reason
+
+
 def split_instances(
     rgb: np.ndarray,
     depth_m: np.ndarray,
     cleaned_foreground_mask: np.ndarray,
     candidates: list[CandidateStats],
 ) -> tuple[np.ndarray, np.ndarray, bool, float, str, dict[str, np.ndarray], bool]:
-    if len(candidates) >= 2:
-        by_bottle = max(candidates, key=lambda c: c.bottle_score)
-        remaining = [c for c in candidates if c.label != by_bottle.label]
-        by_box = max(remaining, key=lambda c: c.box_score) if remaining else None
-        if by_box is not None:
-            labels = cv2.connectedComponentsWithStats(_to_mask_u8(cleaned_foreground_mask), connectivity=8)[1]
-            bottle_mask = (labels == by_bottle.label).astype(np.uint8) * 255
-            box_mask = (labels == by_box.label).astype(np.uint8) * 255
-            conf = min(1.0, 0.5 + 0.25 * abs(by_bottle.bottle_score - by_box.bottle_score) + 0.25)
-            return bottle_mask, box_mask, True, float(conf), "component_assignment", {}, False
-
-    total_mask = _to_mask_u8(cleaned_foreground_mask)
-    waters_mask, ws_conf, ws_reason = _split_component_watershed(rgb, total_mask)
-    color_masks, color_conf, color_reason = _split_component_color(depth_m, rgb, total_mask)
-
-    if ws_conf <= 0 and color_conf <= 0:
-        return np.zeros_like(total_mask), np.zeros_like(total_mask), False, 0.0, f"split_failed:{ws_reason}|{color_reason}", {
-            "watershed_mask": waters_mask,
-        }, True
-
-    labels = []
-    if color_masks:
-        labels = color_masks[:2]
-    else:
-        num_labels, label_img = cv2.connectedComponents(waters_mask)
-        for lab in range(1, num_labels):
-            m = (label_img == lab).astype(np.uint8) * 255
-            if cv2.countNonZero(m) >= MIN_COMPONENT_AREA_PX // 2:
-                labels.append(m)
-        labels = labels[:2]
-
-    if len(labels) < 2:
-        return np.zeros_like(total_mask), np.zeros_like(total_mask), False, max(ws_conf, color_conf), "split_regions_lt_2", {
-            "watershed_mask": waters_mask,
-        }, True
-
-    scored = []
-    h = total_mask.shape[0]
-    for m in labels:
-        ys, xs = np.where(m > 0)
-        x, y, w, hh = cv2.boundingRect(np.column_stack([xs, ys]))
-        aspect = hh / max(w, 1)
-        centroid_y = float(ys.mean())
-        bottle_score = 0.55 * min(aspect / 2.3, 1.5) + 0.45 * (1.0 - centroid_y / h)
-        box_score = 0.55 * min((w / max(hh, 1)) / 2.3, 1.5) + 0.45 * (centroid_y / h)
-        scored.append((m, bottle_score, box_score))
-    bottle_mask = max(scored, key=lambda t: t[1])[0]
-    remaining = [t for t in scored if not np.array_equal(t[0], bottle_mask)]
-    box_mask = max(remaining, key=lambda t: t[2])[0] if remaining else np.zeros_like(total_mask)
-    split_conf = float(min(1.0, 0.40 + max(ws_conf, color_conf)))
-    return bottle_mask, box_mask, True, split_conf, "fallback_split", {
-        "watershed_mask": waters_mask,
-    }, True
-
+    del rgb, depth_m, candidates
+    bottle_mask, box_mask, table_removed, bottle_candidate, box_candidate, confidence, semantic_ok, reason = _extract_refined_instances(cleaned_foreground_mask)
+    extra = {
+        "table_removed_mask": table_removed,
+        "bottle_candidate_mask": bottle_candidate,
+        "box_candidate_mask": box_candidate,
+    }
+    return bottle_mask, box_mask, bool(semantic_ok), float(confidence), reason, extra, True
 
 def _overlay_mask(rgb: np.ndarray, mask: np.ndarray, color: tuple[int, int, int]) -> np.ndarray:
     out = rgb.copy()
@@ -512,15 +581,9 @@ def build_rgbd_object_masks(
     notes: list[str] = []
     combined = _to_mask_u8(cleaned_fg)
     if not split_success:
-        notes.append("Split failed; combined foreground retained.")
-        if candidates:
-            best_bottle = max(candidates, key=lambda c: c.bottle_score)
-            labels = cv2.connectedComponentsWithStats(_to_mask_u8(cleaned_fg), connectivity=8)[1]
-            bottle_mask = (labels == best_bottle.label).astype(np.uint8) * 255
-            box_mask = cv2.subtract(combined, bottle_mask)
-        else:
-            bottle_mask = np.zeros_like(combined)
-            box_mask = np.zeros_like(combined)
+        notes.append("Split failed; refined candidates kept only for debug, final instance masks suppressed.")
+        bottle_mask = np.zeros_like(combined)
+        box_mask = np.zeros_like(combined)
 
     bottle_mask = cv2.bitwise_and(_to_mask_u8(bottle_mask), valid_depth_mask)
     box_mask = cv2.bitwise_and(_to_mask_u8(box_mask), valid_depth_mask)
@@ -549,9 +612,9 @@ def build_rgbd_object_masks(
     if 0 < selected_component_area / float(combined.size) < MIN_FOREGROUND_AREA_RATIO:
         notes.append("Foreground unusually small; check threshold.")
 
-    semantic_label_verified = bool(len(candidates) >= 2 and split_success)
-    if len(candidates) == 0 and split_success:
-        notes.append("semantic labels derived from fallback split only")
+    semantic_label_verified = bool(split_success)
+    if not semantic_label_verified:
+        notes.append("semantic labels not verified; bottle/box masks are debug candidates only")
     diagnostics = MaskDiagnostics(
         frame_index=frame_index,
         valid_ratio=valid_ratio,
@@ -591,8 +654,18 @@ def build_rgbd_object_masks(
         "overlay_valid_mask": _overlay_mask(rgb_u8, valid_depth_mask, (0, 255, 0)),
         "overlay_threshold_candidates": _overlay_mask(rgb_u8, threshold_candidates, (255, 128, 0)),
         "overlay_raw_foreground": _overlay_mask(rgb_u8, raw_fg, (255, 0, 0)),
+        "overlay_table_removed": _overlay_mask(rgb_u8, extra.get('table_removed_mask', np.zeros_like(raw_fg)), (0, 200, 255)),
+        "overlay_bottle_candidate": _overlay_mask(rgb_u8, extra.get('bottle_candidate_mask', np.zeros_like(raw_fg)), (255, 0, 255)),
+        "overlay_box_candidate": _overlay_mask(rgb_u8, extra.get('box_candidate_mask', np.zeros_like(raw_fg)), (255, 255, 0)),
         "overlay_bottle": _overlay_mask(rgb_u8, bottle_mask, (255, 0, 255)),
         "overlay_box": _overlay_mask(rgb_u8, box_mask, (255, 255, 0)),
+        "overlay_instances_refined": cv2.addWeighted(
+            _overlay_mask(rgb_u8, bottle_mask, (255, 0, 255)),
+            0.7,
+            _overlay_mask(rgb_u8, box_mask, (255, 255, 0)),
+            0.3,
+            0,
+        ),
         "overlay_background": _overlay_mask(rgb_u8, background_edit_mask, (0, 255, 255)),
         **extra,
     }
