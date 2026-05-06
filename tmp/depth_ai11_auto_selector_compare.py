@@ -7,8 +7,6 @@ from typing import Any
 import cv2
 import numpy as np
 import torch
-from huggingface_hub import hf_hub_download
-
 from controlnet_aux.segment_anything import SamAutomaticMaskGenerator, sam_model_registry
 from controlnet_aux.segment_anything.predictor import SamPredictor
 
@@ -25,6 +23,8 @@ FRAMES = [4, 23, 33, 80, 140, 200]
 OUT_ROOT = Path('outputs/depth_ai11_auto_selector_comparison_20260506')
 METHODS = ['seeded_grabcut', 'sam_prompt_box', 'sam_auto_selector', 'sam_auto_selector_depth_gated']
 AUTO_SCALE = 0.5
+SAM_CHECKPOINT = "/home/capstone/jua/lerobot/sam_vit_h_4b8939.pth"
+SAM_MODEL_TYPE = 'vit_h'
 
 
 def to_np(value: Any) -> np.ndarray:
@@ -103,8 +103,7 @@ def background_edit_pass(fg_mask: np.ndarray) -> tuple[bool, str]:
 
 
 def sam_model_bundle():
-    ckpt = hf_hub_download('segments-arnaud/sam_vit_b', 'sam_vit_b_01ec64.pth')
-    sam = sam_model_registry['vit_b'](checkpoint=ckpt)
+    sam = sam_model_registry[SAM_MODEL_TYPE](checkpoint=SAM_CHECKPOINT)
     sam.eval()
     predictor = SamPredictor(sam)
     auto = SamAutomaticMaskGenerator(
