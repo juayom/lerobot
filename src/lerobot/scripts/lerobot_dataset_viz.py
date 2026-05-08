@@ -75,6 +75,8 @@ import tqdm
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.constants import ACTION, DONE, OBS_STATE, REWARD
+from lerobot.utils.utils import init_logging
+from lerobot.utils.warning_control import configure_runtime_warnings
 
 
 def to_hwc_uint8_numpy(chw_float32_torch: torch.Tensor) -> np.ndarray:
@@ -176,10 +178,13 @@ def visualize_dataset(
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
-            print("Ctrl-C received. Exiting.")
+            logging.info("Ctrl-C received. Exiting.")
 
 
 def main():
+    init_logging()
+    configure_runtime_warnings()
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument(

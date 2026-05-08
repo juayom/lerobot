@@ -14,6 +14,7 @@ from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraCon
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.genaug.geometry.depth_utils import sanitize_depth, validate_rgbd_pair
 from lerobot.utils.utils import init_logging
+from lerobot.utils.warning_control import configure_runtime_warnings, log_structured_summary
 
 LOGGER = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ def main() -> None:
         raise ValueError("Only --camera realsense is currently supported")
 
     init_logging()
+    configure_runtime_warnings()
     logging.getLogger().setLevel(logging.INFO)
 
     actions = load_actions(Path(args.action_jsonl))
@@ -121,19 +123,16 @@ def main() -> None:
         if camera.is_connected:
             camera.disconnect()
 
-    print(
-        json.dumps(
-            {
-                "repo_id": args.repo_id,
-                "root": str(args.root),
-                "frames_recorded": args.num_frames,
-                "depth_unit": args.depth_unit,
-                "image_key": "observation.images.rgb",
-                "depth_key": "observation.images.depth",
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+    log_structured_summary(
+        "RGB-D record summary",
+        {
+            "repo_id": args.repo_id,
+            "root": str(args.root),
+            "frames_recorded": args.num_frames,
+            "depth_unit": args.depth_unit,
+            "image_key": "observation.images.rgb",
+            "depth_key": "observation.images.depth",
+        },
     )
 
 

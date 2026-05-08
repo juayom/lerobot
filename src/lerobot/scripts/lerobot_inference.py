@@ -42,6 +42,7 @@ from lerobot.utils.constants import OBS_STR
 from lerobot.utils.control_utils import init_keyboard_listener, predict_action
 from lerobot.utils.utils import get_safe_torch_device, init_logging
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
+from lerobot.utils.warning_control import configure_runtime_warnings
 
 
 @dataclass
@@ -72,6 +73,7 @@ class InferenceConfig:
 @parser.wrap()
 def main(cfg: InferenceConfig):
     init_logging()
+    configure_runtime_warnings()
 
     if cfg.display_data:
         init_rerun(session_name="inference")

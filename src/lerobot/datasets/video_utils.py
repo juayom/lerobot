@@ -36,22 +36,24 @@ try:
     import torchvision
 except Exception as exc:  # pragma: no cover - runtime fallback for broken torchvision builds
     torchvision = None
-    logging.warning("torchvision import failed; video decoding will use PyAV fallback paths: %s", exc)
+    logging.info("torchvision import failed; video decoding will use PyAV fallback paths: %s", exc)
 
 from datasets.features.features import register_feature
 from PIL import Image
 
 _VIDEOREADER_FALLBACK_WARNED = False
+_TORCHCODEC_FALLBACK_WARNED = False
 
 
 def get_safe_default_codec():
     if importlib.util.find_spec("torchcodec"):
         return "torchcodec"
-    else:
-        logging.warning(
-            "'torchcodec' is not available in your platform, falling back to 'pyav' as a default decoder"
-        )
-        return "pyav"
+
+    global _TORCHCODEC_FALLBACK_WARNED
+    if not _TORCHCODEC_FALLBACK_WARNED:
+        logging.info("'torchcodec' is not available in your platform, using 'pyav' decoder fallback")
+        _TORCHCODEC_FALLBACK_WARNED = True
+    return "pyav"
 
 
 @lru_cache(maxsize=256)
@@ -272,7 +274,7 @@ def decode_video_frames_torchvision(
     if torchvision is None or not hasattr(torchvision.io, "VideoReader"):
         global _VIDEOREADER_FALLBACK_WARNED
         if not _VIDEOREADER_FALLBACK_WARNED:
-            logging.warning(
+            logging.info(
                 "torchvision.io.VideoReader is unavailable in this build; falling back to direct PyAV decoding"
             )
             _VIDEOREADER_FALLBACK_WARNED = True

@@ -25,6 +25,7 @@ from lerobot.datasets.rgbd_object_aug import (
 )
 from lerobot.genaug.geometry.depth_utils import sanitize_depth
 from lerobot.utils.mask_debug_utils import save_image
+from lerobot.utils.warning_control import configure_runtime_warnings, log_structured_summary
 
 LOGGER = logging.getLogger(__name__)
 
@@ -106,6 +107,7 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    configure_runtime_warnings()
     dataset = LeRobotDataset(repo_id=args.repo_id, root=args.root, tolerance_s=args.tolerance_s)
     output_dir = Path(args.output_dir or (Path.home() / ".cache" / "huggingface" / "lerobot" / args.output_repo_id))
     artifacts_dir = Path(args.artifacts_dir or (Path("outputs") / args.output_repo_id.replace("/", "_")))
@@ -258,17 +260,20 @@ def main() -> None:
     if action_count_in != action_count_out or depth_count_in != depth_count_out:
         raise SystemExit("Alignment failure: action/depth counts do not match")
 
-    print(json.dumps({
-        "input_frames": input_frames,
-        "output_frames": output_frames,
-        "action_count_in": action_count_in,
-        "action_count_out": action_count_out,
-        "depth_count_in": depth_count_in,
-        "depth_count_out": depth_count_out,
-        "output_dir": str(output_dir),
-        "artifacts_dir": str(artifacts_dir),
-        "manifest_path": str(manifest_path),
-    }, ensure_ascii=False, indent=2))
+    log_structured_summary(
+        "RGB-D augmentation summary",
+        {
+            "input_frames": input_frames,
+            "output_frames": output_frames,
+            "action_count_in": action_count_in,
+            "action_count_out": action_count_out,
+            "depth_count_in": depth_count_in,
+            "depth_count_out": depth_count_out,
+            "output_dir": str(output_dir),
+            "artifacts_dir": str(artifacts_dir),
+            "manifest_path": str(manifest_path),
+        },
+    )
 
 
 if __name__ == "__main__":

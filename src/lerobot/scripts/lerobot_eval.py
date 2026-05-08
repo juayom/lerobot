@@ -92,6 +92,7 @@ from lerobot.utils.utils import (
     init_logging,
     inside_slurm,
 )
+from lerobot.utils.warning_control import configure_runtime_warnings, log_structured_summary
 
 
 def rollout(
@@ -504,6 +505,20 @@ def _compile_episode_data(
     return data_dict
 
 
+def _log_eval_summary(info: dict) -> None:
+    log_structured_summary("Overall Aggregated Metrics", info["overall"])
+
+    per_group = info.get("per_group", {})
+    for task_group, task_group_info in per_group.items():
+        log_structured_summary(f"Aggregated Metrics for {task_group}", task_group_info)
+
+
+def _save_eval_info(output_dir: Path, info: dict) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with (output_dir / "eval_info.json").open("w", encoding="utf-8") as f:
+        json.dump(info, f, indent=2)
+
+
 @parser.wrap()
 def eval_main(cfg: EvalPipelineConfig):
     logging.info(pformat(asdict(cfg)))
@@ -572,19 +587,12 @@ def eval_main(cfg: EvalPipelineConfig):
             start_seed=cfg.seed,
             max_parallel_tasks=cfg.env.max_parallel_tasks,
         )
-        print("Overall Aggregated Metrics:")
-        print(info["overall"])
-
-        # Print per-suite stats
-        for task_group, task_group_info in info.items():
-            print(f"\nAggregated Metrics for {task_group}:")
-            print(task_group_info)
+        _log_eval_summary(info)
     # Close all vec envs
     close_envs(envs)
 
     # Save info
-    with open(Path(cfg.output_dir) / "eval_info.json", "w") as f:
-        json.dump(info, f, indent=2)
+    _save_eval_info(Path(cfg.output_dir), info)
 
     logging.info("End of eval")
 
@@ -815,6 +823,7 @@ def eval_policy_all(
 
 def main():
     init_logging()
+    configure_runtime_warnings()
     register_third_party_plugins()
     eval_main()
 

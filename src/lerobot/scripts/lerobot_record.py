@@ -141,6 +141,7 @@ from lerobot.utils.utils import (
     log_say,
 )
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
+from lerobot.utils.warning_control import configure_runtime_warnings
 
 
 @dataclass
@@ -442,6 +443,7 @@ def _log_visual_observation_summary(observation: dict[str, Any], expected_keys: 
 @parser.wrap()
 def record(cfg: RecordConfig) -> LeRobotDataset:
     init_logging()
+    configure_runtime_warnings()
     logging.info(pformat(asdict(cfg)))
     if cfg.display_data:
         init_rerun(session_name="recording", ip=cfg.display_ip, port=cfg.display_port)
