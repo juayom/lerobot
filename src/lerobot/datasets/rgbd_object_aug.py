@@ -15,7 +15,7 @@ METHOD_GRABCUT = "grabcut"
 MODE_BOTTLE = "bottle"
 MODE_BOX = "box"
 MODE_BACKGROUND = "background"
-
+METHOD_SAM_REFINED = "sam_refined"
 
 @dataclass
 class EvalThresholds:
@@ -124,17 +124,35 @@ def predict_masks_for_method(result: RGBDMaskResult, rgb: np.ndarray, method: st
         foreground = cv2.bitwise_or(foreground, likely_fg)
         foreground = cv2.bitwise_and(foreground, result.valid_depth_mask)
         return {"bottle": bottle, "box": box, "foreground": foreground}
-
+        if method == METHOD_SAM_REFINED:
+        bottle = result.bottle_mask.copy()
+        box = result.box_mask.copy()
+        foreground = cv2.bitwise_or(bottle, box)
+        foreground = cv2.bitwise_and(foreground, result.valid_depth_mask)
+        if cv2.countNonZero(foreground) == 0:
+            foreground = result.cleaned_foreground_mask.copy()
+        return {"bottle": bottle, "box": box, "foreground": foreground}
+    
     raise ValueError(f"Unsupported method: {method}")
 
 
 def object_aug_allowed(result: RGBDMaskResult, decision: MethodDecision, mode: str) -> tuple[bool, str]:
     if mode not in {MODE_BOTTLE, MODE_BOX}:
         return True, "background_mode_allowed"
+
     if not decision.passed:
         return False, f"eval_gate_blocked:{decision.reason}"
+
     if not result.diagnostics.semantic_label_verified:
-        return False, "semantic_label_unverified"
+        fr = result.diagnostics.failure_reason or "semantic_unverified"
+        return False, f"semantic_gate_blocked:{fr}"
+
+    if mode == MODE_BOTTLE and int(cv2.countNonZero(result.bottle_mask)) == 0:
+        return False, "semantic_gate_blocked:bottle_empty"
+
+    if mode == MODE_BOX and int(cv2.countNonZero(result.box_mask)) == 0:
+        return False, "semantic_gate_blocked:box_empty"
+
     return True, "object_aug_allowed"
 
 

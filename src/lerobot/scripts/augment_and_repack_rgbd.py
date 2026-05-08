@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import cv2
 from PIL import Image
 
 from lerobot.datasets.augmented_dataset_builder import build_augmented_image_dataset
@@ -151,28 +152,14 @@ def main() -> None:
         result = build_rgbd_object_masks(rgb, depth_m, valid_mask, frame_index=meta["frame_index"])
 
         # save required artifacts for this frame
-        save_image(frame_dir / "rgb.png", result.rgb)
         np.save(frame_dir / "depth.npy", result.depth_m)
-        save_image(frame_dir / "valid_depth_mask.png", result.valid_depth_mask)
-        save_image(frame_dir / "raw_foreground_mask.png", result.raw_foreground_mask)
-        save_image(frame_dir / "cleaned_foreground_mask.png", result.cleaned_foreground_mask)
-        save_image(frame_dir / "connected_components.png", result.connected_components_rgb)
+        save_image(frame_dir / "rgb.png", result.rgb)
         save_image(frame_dir / "bottle_mask.png", result.bottle_mask)
         save_image(frame_dir / "box_mask.png", result.box_mask)
         save_image(frame_dir / "combined_foreground_mask.png", result.combined_foreground_mask)
-        save_image(frame_dir / "background_edit_mask.png", result.background_edit_mask)
-        save_image(frame_dir / "object_edit_mask_bottle.png", result.object_edit_mask_bottle)
-        save_image(frame_dir / "object_edit_mask_box.png", result.object_edit_mask_box)
-        save_image(frame_dir / "overlay_instances.png", result.extra_masks["overlay_bottle"])
-        save_image(frame_dir / "overlay_background_mask.png", result.extra_masks["overlay_background"])
-        save_image(frame_dir / "overlay_valid_mask.png", result.extra_masks["overlay_valid_mask"])
-        save_image(frame_dir / "overlay_threshold_candidates.png", result.extra_masks["overlay_threshold_candidates"])
-        save_image(frame_dir / "overlay_raw_foreground.png", result.extra_masks["overlay_raw_foreground"])
-        save_image(frame_dir / "overlay_table_removed.png", result.extra_masks["overlay_table_removed"])
         save_image(frame_dir / "overlay_bottle_candidate.png", result.extra_masks["overlay_bottle_candidate"])
         save_image(frame_dir / "overlay_box_candidate.png", result.extra_masks["overlay_box_candidate"])
         save_image(frame_dir / "overlay_instances_refined.png", result.extra_masks["overlay_instances_refined"])
-
         mode = modes[idx % len(modes)]
         failure_reason = result.diagnostics.failure_reason
         masks = predict_masks_for_method(result, result.rgb, chosen_method)
@@ -212,6 +199,10 @@ def main() -> None:
             "semantic_gate_passed": bool(result.diagnostics.semantic_label_verified),
             "augmentation_metadata": aug_meta,
             "failure_reason": failure_reason,
+            "top_plane_detected": bool(cv2.countNonZero(result.extra_masks.get("top_plane_mask", np.zeros_like(result.cleaned_foreground_mask))) > 0),
+            "top_plane_area": int(cv2.countNonZero(result.extra_masks.get("top_plane_mask", np.zeros_like(result.cleaned_foreground_mask)))),
+            "bottle_mask_area": int(cv2.countNonZero(result.bottle_mask)),
+            "box_mask_area": int(cv2.countNonZero(result.box_mask)),
         })
         (frame_dir / "diagnostics.json").write_text(json.dumps(diag, ensure_ascii=False, indent=2))
         summary_rows.append(diag)
@@ -226,6 +217,9 @@ def main() -> None:
             _save_rgb(preview_dir / 'bottle_edit_preview.png', bottle_preview)
             _save_rgb(preview_dir / 'box_edit_preview.png', box_preview)
             _save_rgb(preview_dir / 'background_edit_preview.png', background_preview)
+            save_image(preview_dir / 'overlay_selected_bottle.png', result.extra_masks.get('overlay_bottle', result.rgb))
+            save_image(preview_dir / 'overlay_selected_box.png', result.extra_masks.get('overlay_box', result.rgb))
+            save_image(preview_dir / 'overlay_top_plane.png', result.extra_masks.get('overlay_top_plane', result.rgb))
             (preview_dir / 'preview_meta.json').write_text(json.dumps({
                 'frame_index': meta['frame_index'],
                 'chosen_mask_method': chosen_method,

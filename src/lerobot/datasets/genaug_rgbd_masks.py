@@ -27,6 +27,23 @@ ROI_NEAR_PERCENTILE = 12.0
 ROI_UPPER_PERCENTILE = 38.0
 DEPTH_BAND_BELOW_M = 0.03
 DEPTH_BAND_ABOVE_M = 0.12
+TOP_PLANE_MIN_WIDTH_RATIO = 0.28
+TOP_PLANE_MAX_HEIGHT_RATIO = 0.32
+TOP_PLANE_MAX_Y_RATIO = 0.58
+
+BOTTLE_RIGHT_MIN_RATIO = 0.52
+BOTTLE_TOP_MAX_RATIO = 0.52
+BOTTLE_MAX_WIDTH_RATIO = 0.12
+BOTTLE_MIN_ASPECT = 1.05
+BOTTLE_MIN_AREA = 180
+BOTTLE_MAX_AREA_RATIO = 0.06
+
+BOX_MIN_AREA = 2500
+BOX_MIN_WIDTH_RATIO = 0.12
+BOX_MIN_HEIGHT_RATIO = 0.06
+BOX_MAX_WIDTH_RATIO = 0.72
+BOX_MIN_RECTANGULARITY = 0.35
+BOX_OVERLAP_TOP_PLANE_MAX = 0.75
 
 
 @dataclass
@@ -104,6 +121,37 @@ class RGBDMaskResult:
         payload["split_labels"] = self.split_labels
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
+def _component_mask(labels: np.ndarray, label_id: int) -> np.ndarray:
+    return ((labels == label_id).astype(np.uint8) * 255)
+
+
+def _bbox_from_mask(mask: np.ndarray) -> tuple[int, int, int, int] | None:
+    ys, xs = np.where(_to_mask_u8(mask) > 0)
+    if ys.size == 0:
+        return None
+    x0, x1 = int(xs.min()), int(xs.max())
+    y0, y1 = int(ys.min()), int(ys.max())
+    return x0, y0, x1 - x0 + 1, y1 - y0 + 1
+
+
+def _centroid_from_mask(mask: np.ndarray) -> tuple[float, float] | None:
+    ys, xs = np.where(_to_mask_u8(mask) > 0)
+    if ys.size == 0:
+        return None
+    return float(xs.mean()), float(ys.mean())
+
+
+def _rectangularity(mask: np.ndarray) -> float:
+    bbox = _bbox_from_mask(mask)
+    if bbox is None:
+        return 0.0
+    _, _, w, h = bbox
+    area = float(np.count_nonzero(mask))
+    return area / max(float(w * h), 1.0)
+
+
+def _mask_area(mask: np.ndarray) -> int:
+    return int(np.count_nonzero(_to_mask_u8(mask)))
 
 def _to_uint8_rgb(rgb: np.ndarray) -> np.ndarray:
     rgb = np.asarray(rgb)
@@ -328,65 +376,6 @@ def score_candidates(
     return candidates
 
 
-def _split_component_watershed(rgb: np.ndarray, component_mask: np.ndarray) -> tuple[np.ndarray, float, str]:
-    mask = _to_mask_u8(component_mask)
-    if mask.sum() == 0:
-        return np.zeros_like(mask), 0.0, "empty_component"
-    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
-    dist_norm = cv2.normalize(dist, None, 0, 1.0, cv2.NORM_MINMAX)
-    _, sure_fg = cv2.threshold(dist_norm, 0.28, 1.0, cv2.THRESH_BINARY)
-    sure_fg = (sure_fg * 255).astype(np.uint8)
-    kernel = np.ones((3, 3), np.uint8)
-    sure_fg = cv2.morphologyEx(sure_fg, cv2.MORPH_OPEN, kernel)
-    n_markers, markers = cv2.connectedComponents(sure_fg)
-    if n_markers <= 2:
-        return np.zeros_like(mask), 0.0, "watershed_markers_lt_2"
-    markers = markers + 1
-    unknown = cv2.subtract(mask, sure_fg)
-    markers[unknown > 0] = 0
-    ws_input = rgb.copy()
-    markers = cv2.watershed(ws_input, markers.astype(np.int32))
-    unique = [m for m in np.unique(markers) if m > 1]
-    if len(unique) < 2:
-        return np.zeros_like(mask), 0.0, "watershed_regions_lt_2"
-    split = np.zeros_like(mask, dtype=np.uint8)
-    valid_regions = 0
-    for region_id in unique:
-        region = (markers == region_id).astype(np.uint8) * 255
-        if int(cv2.countNonZero(region)) >= MIN_COMPONENT_AREA_PX // 2:
-            valid_regions += 1
-            split = np.maximum(split, region)
-    confidence = min(valid_regions / 2.0, 1.0)
-    if valid_regions < 2:
-        return split, confidence * 0.35, "watershed_regions_small"
-    return split, 0.55 + 0.20 * min(valid_regions, 3) / 3.0, "ok"
-
-
-def _split_component_color(depth_m: np.ndarray, rgb: np.ndarray, component_mask: np.ndarray) -> tuple[list[np.ndarray], float, str]:
-    mask = _to_mask_u8(component_mask)
-    ys, xs = np.where(mask > 0)
-    if ys.size < MIN_COMPONENT_AREA_PX:
-        return [], 0.0, "component_too_small"
-    lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
-    pixels = lab[ys, xs].astype(np.float32)
-    if len(pixels) < 2:
-        return [], 0.0, "not_enough_pixels"
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
-    compactness, labels, centers = cv2.kmeans(pixels, 2, None, criteria, 3, cv2.KMEANS_PP_CENTERS)
-    labels = labels.reshape(-1)
-    masks: list[np.ndarray] = []
-    for k in range(2):
-        m = np.zeros_like(mask)
-        sel = labels == k
-        m[ys[sel], xs[sel]] = 255
-        if int(cv2.countNonZero(m)) >= MIN_COMPONENT_AREA_PX // 2:
-            masks.append(m)
-    if len(masks) < 2:
-        return masks, 0.0, "kmeans_regions_lt_2"
-    center_dist = float(np.linalg.norm(centers[0] - centers[1]))
-    conf = min(center_dist / 40.0, 1.0) * 0.7
-    return masks, conf, "ok"
-
 
 def _largest_component(mask: np.ndarray) -> np.ndarray:
     mask_u8 = _to_mask_u8(mask)
@@ -397,127 +386,296 @@ def _largest_component(mask: np.ndarray) -> np.ndarray:
     return (labels == best).astype(np.uint8) * 255
 
 
-def _best_vertical_seed(mask: np.ndarray) -> np.ndarray:
-    opened = cv2.morphologyEx(_to_mask_u8(mask), cv2.MORPH_OPEN, np.ones((9, 41), dtype=np.uint8))
-    n, labels, stats, centroids = cv2.connectedComponentsWithStats(opened, connectivity=8)
-    if n <= 1:
-        return np.zeros_like(opened)
-    h, w = opened.shape
-    cx = w / 2.0
-    best_label = 0
+def _pick_bottle_candidate(mask: np.ndarray) -> np.ndarray:
+    raw = _to_mask_u8(mask)
+    if _mask_area(raw) == 0:
+        return np.zeros_like(raw)
+
+    h, w = raw.shape
+    n, labels, stats, centroids = cv2.connectedComponentsWithStats(raw, connectivity=8)
+
+    total_fg = max(float(_mask_area(raw)), 1.0)
+    best = np.zeros_like(raw)
     best_score = -1e18
+
     for i in range(1, n):
         area = int(stats[i, cv2.CC_STAT_AREA])
-        if area < 800:
+        if area < BOTTLE_MIN_AREA:
             continue
+
         x = int(stats[i, cv2.CC_STAT_LEFT])
         y = int(stats[i, cv2.CC_STAT_TOP])
         bw = int(stats[i, cv2.CC_STAT_WIDTH])
         bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+        cx, cy = float(centroids[i][0]), float(centroids[i][1])
+
+        width_ratio = bw / max(w, 1)
+        height_ratio = bh / max(h, 1)
+        area_ratio = area / total_fg
         aspect = bh / max(bw, 1)
-        centroid_x = float(centroids[i][0])
-        centroid_y = float(centroids[i][1])
-        center_bias = 1.0 - min(abs(centroid_x - cx) / cx, 1.0)
-        upper_bias = 1.0 - (centroid_y / max(h, 1))
-        narrow_bias = 1.0 - min(bw / max(w * 0.18, 1.0), 1.0)
-        score = 0.35 * min(aspect / 2.0, 1.5) + 0.30 * upper_bias + 0.20 * center_bias + 0.15 * narrow_bias
+
+        right_bias = cx / max(w, 1)
+        top_bias = 1.0 - (cy / max(h, 1))
+        narrow_bias = 1.0 - min(width_ratio / max(BOTTLE_MAX_WIDTH_RATIO, 1e-6), 2.0)
+
+        if right_bias < BOTTLE_RIGHT_MIN_RATIO:
+            continue
+        if (cy / max(h, 1)) > BOTTLE_TOP_MAX_RATIO:
+            continue
+        if area_ratio > BOTTLE_MAX_AREA_RATIO:
+            continue
+
+        score = (
+            0.30 * min(aspect / 2.0, 1.5)
+            + 0.28 * right_bias
+            + 0.22 * top_bias
+            + 0.20 * narrow_bias
+        )
+
+        if aspect < BOTTLE_MIN_ASPECT:
+            score -= 0.35
+
         if score > best_score:
             best_score = score
-            best_label = i
-    if best_label == 0:
-        return np.zeros_like(opened)
-    return (labels == best_label).astype(np.uint8) * 255
+            best = _component_mask(labels, i)
 
+    return best
+def _pick_box_candidate(mask: np.ndarray, bottle_mask: np.ndarray, top_plane_mask: np.ndarray) -> np.ndarray:
+    raw = _to_mask_u8(mask)
+    bottle = _to_mask_u8(bottle_mask)
+    top_plane = _to_mask_u8(top_plane_mask)
 
-def _extract_refined_instances(cleaned_foreground_mask: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, bool, str]:
-    raw = _to_mask_u8(cleaned_foreground_mask)
-    if cv2.countNonZero(raw) == 0:
-        z = np.zeros_like(raw)
-        return z, z, z, z, z, 0.0, False, "empty_foreground"
+    if _mask_area(raw) == 0:
+        return np.zeros_like(raw)
 
-    vertical_seed = _best_vertical_seed(raw)
-    if cv2.countNonZero(vertical_seed) == 0:
-        z = np.zeros_like(raw)
-        return z, z, z, z, z, 0.0, False, "no_vertical_seed"
+    search = raw.copy()
+    if _mask_area(top_plane) > 0:
+        search = cv2.subtract(search, top_plane)
+    if _mask_area(bottle) > 0:
+        search = cv2.subtract(search, cv2.dilate(bottle, np.ones((21, 21), np.uint8), iterations=1))
 
-    table_removed = cv2.bitwise_and(raw, cv2.dilate(vertical_seed, np.ones((31, 61), dtype=np.uint8), iterations=1))
-    table_removed = _largest_component(table_removed)
+    h, w = search.shape
+    n, labels, stats, centroids = cv2.connectedComponentsWithStats(search, connectivity=8)
 
-    seed_pts = np.column_stack(np.where(vertical_seed > 0)[::-1])
-    vx, vy, vw, vh = cv2.boundingRect(seed_pts)
-    bottle_candidate = vertical_seed.copy()
-    cutoff_y = vy + int(0.74 * vh)
-    bottle_candidate[cutoff_y:, :] = 0
-    bottle_candidate = _largest_component(bottle_candidate)
-    if cv2.countNonZero(bottle_candidate) == 0:
-        bottle_candidate = _largest_component(vertical_seed)
+    bottle_centroid = _centroid_from_mask(bottle)
+    best = np.zeros_like(search)
+    best_score = -1e18
 
-    dilated_bottle = cv2.dilate(bottle_candidate, np.ones((19, 19), dtype=np.uint8), iterations=1)
-    support_zone = table_removed.copy()
-    support_zone[: max(0, vy + int(0.35 * vh)), :] = 0
-    x0 = max(0, vx - max(24, int(0.7 * vw)))
-    x1 = min(raw.shape[1], vx + vw + max(24, int(0.7 * vw)))
-    support_zone[:, :x0] = 0
-    support_zone[:, x1:] = 0
-    support_zone = cv2.subtract(support_zone, dilated_bottle)
-    box_candidate = _largest_component(support_zone)
+    for i in range(1, n):
+        comp = _component_mask(labels, i)
+        area = _mask_area(comp)
+        if area < BOX_MIN_AREA:
+            continue
 
-    bottle_centroid, bottle_bbox, bottle_area = _mask_geometry(bottle_candidate)
-    box_centroid, box_bbox, box_area = _mask_geometry(box_candidate)
-    _table_centroid, table_bbox, _table_area = _mask_geometry(table_removed)
+        bbox = _bbox_from_mask(comp)
+        if bbox is None:
+            continue
+        x, y, bw, bh = bbox
+        cx, cy = float(centroids[i][0]), float(centroids[i][1])
 
-    semantic_ok = False
-    confidence = 0.0
-    reason = "semantic_checks_failed"
-    if bottle_bbox and box_bbox:
-        bw, bh = bottle_bbox[2], bottle_bbox[3]
-        xw, xh = box_bbox[2], box_bbox[3]
-        bottle_aspect = bh / max(bw, 1)
-        box_aspect = xh / max(xw, 1)
-        bottle_upper = bottle_centroid[1] < box_centroid[1]
-        bottle_narrow = bw < (max(72, int(0.28 * table_bbox[2])) if table_bbox else 90)
-        box_not_table = xw < (max(180, int(0.62 * table_bbox[2])) if table_bbox else 220)
-        box_below = box_centroid[1] > bottle_centroid[1] + 12
-        box_local = abs(box_centroid[0] - bottle_centroid[0]) < max(90, int(1.4 * bw))
-        semantic_ok = bool(
-            bottle_area > 1200 and box_area > 900 and bottle_aspect > 1.45 and bottle_upper and bottle_narrow
-            and box_below and box_local and box_not_table and box_aspect < 1.25
+        width_ratio = bw / max(w, 1)
+        height_ratio = bh / max(h, 1)
+        rect = _rectangularity(comp)
+        plane_overlap = _overlap_ratio(comp, top_plane)
+
+        if width_ratio < BOX_MIN_WIDTH_RATIO or width_ratio > BOX_MAX_WIDTH_RATIO:
+            continue
+        if height_ratio < BOX_MIN_HEIGHT_RATIO:
+            continue
+        if rect < BOX_MIN_RECTANGULARITY:
+            continue
+        if plane_overlap > BOX_OVERLAP_TOP_PLANE_MAX:
+            continue
+
+        below_bottle_bonus = 0.0
+        if bottle_centroid is not None and cy > bottle_centroid[1] + 10:
+            below_bottle_bonus = 0.35
+
+        lower_bias = cy / max(h, 1)
+
+        score = (
+            0.30 * min(rect / 0.6, 1.5)
+            + 0.22 * min(width_ratio / 0.25, 1.5)
+            + 0.18 * min(height_ratio / 0.12, 1.5)
+            + 0.15 * lower_bias
+            + below_bottle_bonus
+            - 0.20 * plane_overlap
         )
-        confidence = float(min(1.0, 0.18 * bottle_aspect + 0.16 * float(bottle_upper) + 0.16 * float(bottle_narrow) + 0.16 * float(box_below) + 0.16 * float(box_local) + 0.18 * float(box_not_table)))
-        if semantic_ok:
-            reason = "refined_vertical_support_split"
-        elif not box_not_table:
-            reason = "box_candidate_too_wide_table_like"
-        elif not bottle_narrow:
-            reason = "bottle_candidate_not_narrow_enough"
-        elif not box_below:
-            reason = "box_candidate_not_below_bottle"
 
-    if not semantic_ok:
-        final_bottle = np.zeros_like(raw)
-        final_box = np.zeros_like(raw)
+        if score > best_score:
+            best_score = score
+            best = comp
+
+    return best
+
+def detect_top_plane(depth_m: np.ndarray, foreground_mask: np.ndarray, bottle_seed: np.ndarray | None = None) -> np.ndarray:
+    del depth_m  # 이번 버전은 depth 조건을 과감히 뺌
+
+    fg = _to_mask_u8(foreground_mask)
+    if _mask_area(fg) == 0:
+        return np.zeros_like(fg)
+
+    h, w = fg.shape
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(fg, connectivity=8)
+
+    best = np.zeros_like(fg)
+    best_score = -1e18
+
+    for i in range(1, n):
+        comp = _component_mask(labels, i)
+        area = _mask_area(comp)
+        if area < 1500:
+            continue
+
+        bbox = _bbox_from_mask(comp)
+        if bbox is None:
+            continue
+        x, y, bw, bh = bbox
+
+        width_ratio = bw / max(w, 1)
+        height_ratio = bh / max(h, 1)
+        y_ratio = y / max(h, 1)
+        rect = _rectangularity(comp)
+
+        is_plane_like = (
+            width_ratio >= TOP_PLANE_MIN_WIDTH_RATIO
+            and height_ratio <= TOP_PLANE_MAX_HEIGHT_RATIO
+            and y_ratio <= TOP_PLANE_MAX_Y_RATIO
+        )
+        if not is_plane_like:
+            continue
+
+        score = (
+            0.45 * min(width_ratio / 0.5, 1.5)
+            + 0.30 * (1.0 - min(height_ratio / 0.25, 1.5))
+            + 0.25 * min(rect / 0.6, 1.5)
+        )
+
+        if bottle_seed is not None and _mask_area(bottle_seed) > 0:
+            overlap = _overlap_ratio(comp, cv2.dilate(_to_mask_u8(bottle_seed), np.ones((11, 11), np.uint8), iterations=1))
+            score -= 0.5 * overlap
+
+        if score > best_score:
+            best_score = score
+            best = comp
+
+    return best
+
+def _extract_refined_instances(
+    depth_m: np.ndarray,
+    cleaned_foreground_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, bool, str]:
+    raw = _to_mask_u8(cleaned_foreground_mask)
+    if _mask_area(raw) == 0:
+        z = np.zeros_like(raw)
+        return z, z, z, z, z, z, 0.0, False, "empty_foreground"
+
+    top_plane_mask = detect_top_plane(depth_m, raw, None)
+
+    fg_wo_plane = raw.copy()
+    if _mask_area(top_plane_mask) > 0:
+        fg_wo_plane = cv2.subtract(fg_wo_plane, top_plane_mask)
+
+    bottle_candidate = _pick_bottle_candidate(raw)
+    if _mask_area(bottle_candidate) == 0:
+        bottle_candidate = _pick_bottle_candidate(fg_wo_plane)
+
+    box_candidate = _pick_box_candidate(raw, bottle_candidate, top_plane_mask)
+    if _mask_area(box_candidate) == 0:
+        box_candidate = _pick_box_candidate(fg_wo_plane, bottle_candidate, top_plane_mask)
+
+    bottle_bbox = _bbox_from_mask(bottle_candidate)
+    box_bbox = _bbox_from_mask(box_candidate)
+    bottle_centroid = _centroid_from_mask(bottle_candidate)
+    box_centroid = _centroid_from_mask(box_candidate)
+
+    bottle_ok = False
+    box_ok = False
+
+    if bottle_bbox is not None and bottle_centroid is not None:
+        _, _, bw, bh = bottle_bbox
+        aspect = bh / max(bw, 1)
+        cx, cy = bottle_centroid
+        h, w = raw.shape
+        bottle_ok = (
+            _mask_area(bottle_candidate) >= BOTTLE_MIN_AREA
+            and aspect >= BOTTLE_MIN_ASPECT
+            and (cx / max(w, 1)) >= BOTTLE_RIGHT_MIN_RATIO
+            and (cy / max(h, 1)) <= BOTTLE_TOP_MAX_RATIO
+        )
+
+    if box_bbox is not None:
+        rect = _rectangularity(box_candidate)
+        plane_overlap = _overlap_ratio(box_candidate, top_plane_mask)
+        box_ok = (
+            _mask_area(box_candidate) >= BOX_MIN_AREA
+            and rect >= BOX_MIN_RECTANGULARITY
+            and plane_overlap <= BOX_OVERLAP_TOP_PLANE_MAX
+        )
+        if bottle_centroid is not None and box_centroid is not None:
+            box_ok = box_ok and (box_centroid[1] > bottle_centroid[1] + 10)
+
+    semantic_ok = bool(bottle_ok and box_ok)
+
+    if semantic_ok:
+        reason = "refined_split_pass"
+    elif _mask_area(box_candidate) > 0 and _mask_area(bottle_candidate) == 0:
+        reason = "box_candidate_only"
+    elif _mask_area(bottle_candidate) > 0 and _mask_area(box_candidate) == 0:
+        reason = "bottle_candidate_only"
+    elif _mask_area(bottle_candidate) == 0 and _mask_area(box_candidate) == 0:
+        reason = "no_bottle_or_box_candidate"
+    elif not bottle_ok:
+        reason = "bottle_candidate_failed_semantic_check"
     else:
-        final_bottle = bottle_candidate
-        final_box = box_candidate
+        reason = "box_candidate_failed_semantic_check"
 
-    return final_bottle, final_box, table_removed, bottle_candidate, box_candidate, confidence, semantic_ok, reason
+    confidence = 0.0
+    confidence += 0.5 if bottle_ok else 0.2 if _mask_area(bottle_candidate) > 0 else 0.0
+    confidence += 0.5 if box_ok else 0.2 if _mask_area(box_candidate) > 0 else 0.0
 
+    # semantic false여도 후보는 남긴다
+    final_bottle = _to_mask_u8(bottle_candidate)
+    final_box = _to_mask_u8(box_candidate)
 
+    return (
+        final_bottle,
+        final_box,
+        fg_wo_plane,
+        bottle_candidate,
+        box_candidate,
+        top_plane_mask,
+        float(confidence),
+        semantic_ok,
+        reason,
+    )
+        
 def split_instances(
     rgb: np.ndarray,
     depth_m: np.ndarray,
     cleaned_foreground_mask: np.ndarray,
     candidates: list[CandidateStats],
 ) -> tuple[np.ndarray, np.ndarray, bool, float, str, dict[str, np.ndarray], bool]:
-    del rgb, depth_m, candidates
-    bottle_mask, box_mask, table_removed, bottle_candidate, box_candidate, confidence, semantic_ok, reason = _extract_refined_instances(cleaned_foreground_mask)
+    del rgb, candidates
+    bottle_mask, box_mask, table_removed, bottle_candidate, box_candidate, top_plane_mask, confidence, semantic_ok, reason = _extract_refined_instances(
+        depth_m,
+        cleaned_foreground_mask,
+    )
     extra = {
         "table_removed_mask": table_removed,
         "bottle_candidate_mask": bottle_candidate,
         "box_candidate_mask": box_candidate,
+        "top_plane_mask": top_plane_mask,
     }
+    print(
+        "[DEBUG split] "
+        f"bottle_before_valid={cv2.countNonZero(_to_mask_u8(bottle_mask))} "
+        f"box_before_valid={cv2.countNonZero(_to_mask_u8(box_mask))} "
+        f"semantic_ok={semantic_ok} "
+        f"reason={reason} "
+        f"confidence={confidence:.3f}"
+    )
     return bottle_mask, box_mask, bool(semantic_ok), float(confidence), reason, extra, True
-
 def _overlay_mask(rgb: np.ndarray, mask: np.ndarray, color: tuple[int, int, int]) -> np.ndarray:
     out = rgb.copy()
     mask_u8 = _to_mask_u8(mask)
@@ -537,6 +695,26 @@ def _mask_geometry(mask: np.ndarray) -> tuple[list[float], list[int], int]:
     area = int(ys.size)
     return centroid, bbox, area
 
+def _mask_rectangularity(mask: np.ndarray) -> float:
+    mask_u8 = _to_mask_u8(mask)
+    ys, xs = np.where(mask_u8 > 0)
+    if ys.size == 0:
+        return 0.0
+    x0, x1 = int(xs.min()), int(xs.max())
+    y0, y1 = int(ys.min()), int(ys.max())
+    box_area = max((x1 - x0 + 1) * (y1 - y0 + 1), 1)
+    return float(ys.size / box_area)
+
+
+
+
+def _overlap_ratio(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
+    a = _to_mask_u8(mask_a) > 0
+    b = _to_mask_u8(mask_b) > 0
+    denom = float(a.sum())
+    if denom <= 0:
+        return 0.0
+    return float((a & b).sum() / denom)
 
 def build_rgbd_object_masks(
     rgb: np.ndarray,
@@ -581,13 +759,18 @@ def build_rgbd_object_masks(
     notes: list[str] = []
     combined = _to_mask_u8(cleaned_fg)
     if not split_success:
-        notes.append("Split failed; refined candidates kept only for debug, final instance masks suppressed.")
-        bottle_mask = np.zeros_like(combined)
-        box_mask = np.zeros_like(combined)
+        notes.append("Semantic verification failed; candidate masks kept for debug and inspection.")
+    else:
+        notes.append("Semantic verification passed.")
 
     bottle_mask = cv2.bitwise_and(_to_mask_u8(bottle_mask), valid_depth_mask)
     box_mask = cv2.bitwise_and(_to_mask_u8(box_mask), valid_depth_mask)
     combined = cv2.bitwise_and(cv2.bitwise_or(bottle_mask, box_mask), valid_depth_mask)
+    print(
+        f"[DEBUG valid] frame={frame_index} "
+        f"bottle_after_valid={cv2.countNonZero(bottle_mask)} "
+        f"box_after_valid={cv2.countNonZero(box_mask)}"
+    )
     if cv2.countNonZero(combined) == 0:
         combined = cv2.bitwise_and(_to_mask_u8(cleaned_fg), valid_depth_mask)
 
@@ -614,7 +797,10 @@ def build_rgbd_object_masks(
 
     semantic_label_verified = bool(split_success)
     if not semantic_label_verified:
-        notes.append("semantic labels not verified; bottle/box masks are debug candidates only")
+        notes.append("semantic labels not verified; candidate masks are kept but not trusted for object-level augmentation")
+    top_plane_area = int(cv2.countNonZero(extra.get("top_plane_mask", np.zeros_like(raw_fg))))
+    if top_plane_area > 0:
+        notes.append(f"top_plane_detected_area={top_plane_area}")
     diagnostics = MaskDiagnostics(
         frame_index=frame_index,
         valid_ratio=valid_ratio,
@@ -668,6 +854,8 @@ def build_rgbd_object_masks(
         ),
         "overlay_background": _overlay_mask(rgb_u8, background_edit_mask, (0, 255, 255)),
         **extra,
+        "overlay_top_plane": _overlay_mask(rgb_u8, extra.get('top_plane_mask', np.zeros_like(raw_fg)), (80, 255, 255)),
+        "top_plane_mask": extra.get("top_plane_mask", np.zeros_like(raw_fg)),
     }
 
     LOGGER.info(

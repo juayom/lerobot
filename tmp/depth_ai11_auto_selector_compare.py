@@ -23,7 +23,7 @@ FRAMES = [4, 23, 33, 80, 140, 200]
 OUT_ROOT = Path('outputs/depth_ai11_auto_selector_comparison_20260506')
 METHODS = ['seeded_grabcut', 'sam_prompt_box', 'sam_auto_selector', 'sam_auto_selector_depth_gated']
 AUTO_SCALE = 0.5
-SAM_CHECKPOINT = "/home/capstone/jua/lerobot/sam_vit_h_4b8939.pth"
+SAM_CHECKPOINT = "/home/lerobot/aicapstone/lerobot/sam_vit_h_4b8939.pth"
 SAM_MODEL_TYPE = 'vit_h'
 
 
