@@ -31,7 +31,7 @@ from lerobot.envs.configs import EnvConfig
 from lerobot.envs.utils import env_to_policy_features
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
-from lerobot.policies.groot.configuration_groot import GrootConfig
+GrootConfig = None  # [capstone] disabled unused groot import
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from lerobot.policies.pi05.configuration_pi05 import PI05Config
 from lerobot.policies.pi06.configuration_pi06 import PI06Config
@@ -124,7 +124,7 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from lerobot.policies.sarm.modeling_sarm import SARMRewardModel
 
         return SARMRewardModel
-    elif name == "groot":
+    elif False and name == "groot":  # [capstone] disabled unused groot
         from lerobot.policies.groot.modeling_groot import GrootPolicy
 
         return GrootPolicy
@@ -182,7 +182,7 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return SmolVLAConfig(**kwargs)
     elif policy_type == "reward_classifier":
         return RewardClassifierConfig(**kwargs)
-    elif policy_type == "groot":
+    elif False and policy_type == "groot":  # [capstone] disabled unused groot
         return GrootConfig(**kwargs)
     elif policy_type == "xvla":
         return XVLAConfig(**kwargs)
@@ -250,7 +250,7 @@ def make_pre_post_processors(
     """
     if pretrained_path:
         # TODO(Steven): Temporary patch, implement correctly the processors for Gr00t
-        if isinstance(policy_cfg, GrootConfig):
+        if False and GrootConfig is not None and isinstance(policy_cfg, GrootConfig):  # [capstone] disabled unused groot
             # GROOT handles normalization in groot_pack_inputs_v3 step
             # Need to override both stats AND normalize_min_max since saved config might be empty
             preprocessor_overrides = {}
@@ -380,7 +380,7 @@ def make_pre_post_processors(
             dataset_stats=kwargs.get("dataset_stats"),
             dataset_meta=kwargs.get("dataset_meta"),
         )
-    elif isinstance(policy_cfg, GrootConfig):
+    elif False and GrootConfig is not None and isinstance(policy_cfg, GrootConfig):  # [capstone] disabled unused groot
         from lerobot.policies.groot.processor_groot import make_groot_pre_post_processors
 
         processors = make_groot_pre_post_processors(

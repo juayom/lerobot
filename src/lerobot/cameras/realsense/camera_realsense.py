@@ -323,24 +323,14 @@ class RealSenseCamera(Camera):
                 self.width, self.height = actual_width, actual_height
                 self.capture_width, self.capture_height = actual_width, actual_height
 
-    def read_depth(self, timeout_ms: int = 200) -> NDArray[Any]:
+    def read_depth(self, timeout_ms: int | None = None) -> NDArray[Any]:
         """
         Reads a single frame (depth) synchronously from the camera.
-
-        This is a blocking call. It waits for a coherent set of frames (depth)
-        from the camera hardware via the RealSense pipeline.
-
-        Returns:
-            np.ndarray: The depth map as a NumPy array (height, width)
-                  of type `np.uint16` (raw depth values in millimeters) and rotation.
-
-        Raises:
-            DeviceNotConnectedError: If the camera is not connected.
-            RuntimeError: If reading frames from the pipeline fails or frames are invalid.
         """
-        if timeout_ms:
+
+        if timeout_ms is not None:
             logger.warning(
-                f"{self} read() timeout_ms parameter is deprecated and will be removed in future versions."
+                f"{self} read_depth() timeout_ms parameter is deprecated and will be removed in future versions."
             )
 
         if not self.use_depth:
