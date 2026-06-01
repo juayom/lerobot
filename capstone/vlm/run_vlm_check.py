@@ -1,5 +1,3 @@
-# capstone/vlm/run_vlm_check.py
-
 import argparse
 import json
 
