@@ -1,0 +1,58 @@
+{
+  "box": [
+    {
+      "name": "wood",
+      "prompt": "the surface of the box covered with rich natural oak wood grain texture, visible wood grain lines, warm brown wooden planks, smooth polished wood surface, same exact rectangular box shape, photorealistic, high quality",
+      "negative_prompt": "change shape, change form, deformed, distorted, different shape, blurry, low quality, cartoon, unrealistic, metal, leather, plastic, painted, white",
+      "controlnet_conditioning_scale": 1.2,
+      "guidance_scale": 9.0
+    },
+    {
+      "name": "metal",
+      "prompt": "the surface of the box made of shiny silver brushed aluminum metal, perfectly flat top surface, sharp clean edges, metallic grey reflective surface, same exact rectangular box shape with flat top, photorealistic",
+      "negative_prompt": "change shape, deformed, distorted, wood, wooden, leather, curved top, rounded top, uneven surface, bumpy, irregular",
+      "controlnet_conditioning_scale": 1.3,
+      "guidance_scale": 10.0
+    },
+    {
+      "name": "leather",
+      "prompt": "the surface of the box wrapped in smooth clean beige leather, fine leather material, neat stitching, light tan color, same exact rectangular box shape, photorealistic",
+      "negative_prompt": "change shape, deformed, distorted, dark, rough, wrinkled, worn, dirty, wood, metal",
+      "controlnet_conditioning_scale": 1.2,
+      "guidance_scale": 9.0
+    }
+  ],
+  "bottle": [
+    {
+      "name": "wood",
+      "prompt": "the surface of the medicine bottle made of dark walnut wood texture, wooden cylinder, same exact bottle shape, photorealistic",
+      "negative_prompt": "change shape, change form, deformed, distorted, different shape, blurry, low quality, cartoon, unrealistic",
+      "controlnet_conditioning_scale": 1.2,
+      "guidance_scale": 9.0
+    },
+    {
+      "name": "metal",
+      "prompt": "the surface of the medicine bottle made of shiny chrome aluminum metal, metallic silver finish, same exact bottle shape, photorealistic",
+      "negative_prompt": "change shape, deformed, distorted, wood, wooden, blurry, cartoon, unrealistic",
+      "controlnet_conditioning_scale": 1.2,
+      "guidance_scale": 9.0
+    }
+  ],
+  "background": [
+    {
+      "name": "wood_floor",
+      "prompt": "the entire background changed to warm natural hardwood wooden floor and plain smooth white wall with no door no window, clean minimal interior, warm lighting, seamless natural wood flooring, photorealistic, DSLR photo",
+      "negative_prompt": "change shape, deformed, cartoon, unrealistic, low quality, door, window, frame, carpet, rug, tile, concrete, dark",
+      "controlnet_conditioning_scale": 0.5,
+      "guidance_scale": 12.0
+    },
+    {
+      "name": "navy_carpet",
+      "prompt": "the entire background changed to deep navy blue soft thick carpet flooring and plain smooth white wall with no door no window, cozy interior, warm lighting, fabric carpet texture, photorealistic, DSLR photo",
+      "negative_prompt": "change shape, deformed, cartoon, unrealistic, low quality, door, window, frame, wood floor, tile, concrete, beige, grey",
+      "controlnet_conditioning_scale": 0.5,
+      "guidance_scale": 12.0
+    }
+  ]
+}
+
