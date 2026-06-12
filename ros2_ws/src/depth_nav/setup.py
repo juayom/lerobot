@@ -20,7 +20,6 @@ setup(
     entry_points={
         'console_scripts': [
             'depth_detector = depth_nav.depth_detector:main',
-            'nav_controller = depth_nav.nav_controller:main',
             'robot_fsm = depth_nav.robot_fsm:main',
         ],
     },
