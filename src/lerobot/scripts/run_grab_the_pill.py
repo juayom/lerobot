@@ -1,26 +1,28 @@
-
 import argparse
 import json
 import subprocess
 import sys
+import os
+import signal
+import time
 from pathlib import Path
 
 
 DEFAULT_PROJECT_ROOT = Path("/home/lerobot/aicapstone/lerobot")
-DEFAULT_POLICY_PATH = (
-    DEFAULT_PROJECT_ROOT / "local_policies/grab_the_pill_act_fixed"
-)
+
+DEFAULT_POLICY_PATH = "/home/lerobot/aicapstone/lerobot/local_policies/grab_the_pill_bottle_act"
+# LeRobot 가상환경의 lerobot-inference 절대경로
+LEROBOT_INFERENCE = Path("/home/lerobot/venv/lerobot/bin/lerobot-inference")
 
 
 def build_camera_config() -> str:
     camera_config = {
         "intel": {
-            "type": "intelrealsense",
-            "serial_number_or_name": "332322071907",
-            "width": 1280,
-            "height": 720,
+            "type": "opencv",
+            "index_or_path": "/dev/video4",
+            "width": 640,
+            "height": 480,
             "fps": 30,
-            "use_depth": True,
         }
     }
 
@@ -33,8 +35,12 @@ def run_grab_the_pill(
     display_data: bool,
     timeout_s: int | None,
 ) -> bool:
+    if not LEROBOT_INFERENCE.exists():
+        print(f"[GRAB][ERROR] lerobot-inference not found: {LEROBOT_INFERENCE}")
+        return False
+
     cmd = [
-        "lerobot-inference",
+        str(LEROBOT_INFERENCE),
         "--robot.type=so101_follower",
         "--robot.port=/dev/follower",
         "--robot.id=follower",
@@ -44,32 +50,65 @@ def run_grab_the_pill(
         f"--display_data={str(display_data).lower()}",
     ]
 
+    env = {
+        **os.environ,
+        "PYTHONPATH": f"{DEFAULT_PROJECT_ROOT / 'src'}:{DEFAULT_PROJECT_ROOT}",
+    }
+
     print("[GRAB] command:")
     print(" ".join(cmd))
+    print("[GRAB] PYTHONPATH =", env["PYTHONPATH"])
 
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             cwd=str(DEFAULT_PROJECT_ROOT),
-            timeout=timeout_s,
+            env=env,
         )
 
-        if result.returncode == 0:
+        if timeout_s is not None and timeout_s > 0:
+            time.sleep(timeout_s)
+
+            print(f"[GRAB] timeout after {timeout_s} seconds.")
+            print("[GRAB] send SIGINT for graceful shutdown...")
+
+            proc.send_signal(signal.SIGINT)
+
+            try:
+                proc.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                print("[GRAB] SIGINT timeout. terminate process...")
+                proc.terminate()
+
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    print("[GRAB] terminate timeout. kill process...")
+                    proc.kill()
+                    proc.wait()
+
+            time.sleep(3.0)
+
+            print("[GRAB] policy stopped after timed run.")
+            return True
+
+        result = proc.wait()
+
+        if result == 0:
             print("[GRAB] policy finished successfully.")
             return True
 
-        print(f"[GRAB] policy failed. returncode={result.returncode}")
+        print(f"[GRAB] policy failed. returncode={result}")
         return False
-
-    except subprocess.TimeoutExpired:
-        print(f"[GRAB] timeout after {timeout_s} seconds.")
-        # timeout을 실패로 볼지 성공으로 볼지는 실험하면서 결정.
-        # 지금은 정책이 일정 시간 실행되면 다음 단계로 넘어가도록 True 처리.
-        return True
 
     except FileNotFoundError:
         print("[GRAB] lerobot-inference command not found.")
-        print("[GRAB] Check whether lerobot environment is activated.")
+        print(f"[GRAB] expected path: {LEROBOT_INFERENCE}")
+        return False
+
+    except FileNotFoundError:
+        print("[GRAB] lerobot-inference command not found.")
+        print(f"[GRAB] expected path: {LEROBOT_INFERENCE}")
         return False
 
 
@@ -78,7 +117,7 @@ def main():
 
     parser.add_argument(
         "--instruction",
-        default="grab the pill",
+        default="grab the pill bottle",
     )
 
     parser.add_argument(

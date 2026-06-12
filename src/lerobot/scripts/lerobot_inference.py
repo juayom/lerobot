@@ -172,11 +172,25 @@ def main(cfg: InferenceConfig):
             act_processed_policy = make_robot_action(action_values, robot_features)
             logging.info(f"DEBUG: act_processed_policy: {act_processed_policy}")
 
-            # Apply robot action processor pipeline
             robot_action_to_send = robot_action_processor((act_processed_policy, obs))
-            logging.info(f"DEBUG: robot_action_to_send: {robot_action_to_send}")
+            logging.info(f"DEBUG: robot_action_to_send before clamp: {robot_action_to_send}")
 
-            # Send action to robot
+            # [CAPSTONE PATCH] gripper 과닫힘 방지
+            # gripper.pos 값이 작을수록 닫힘, 클수록 열림
+            # grab 모델이 gripper.pos를 7 근처까지 닫으면 6번 모터가 빠지는 현상 완화
+            MIN_GRIPPER_POS = 13.0
+
+            if isinstance(robot_action_to_send, dict) and "gripper.pos" in robot_action_to_send:
+                original_gripper = float(robot_action_to_send["gripper.pos"])
+
+                if original_gripper < MIN_GRIPPER_POS:
+                    robot_action_to_send["gripper.pos"] = MIN_GRIPPER_POS
+                    logging.info(
+                        f"[CAPSTONE] clamp gripper.pos: {original_gripper:.3f} -> {MIN_GRIPPER_POS:.3f}"
+                    )
+
+            logging.info(f"DEBUG: robot_action_to_send after clamp: {robot_action_to_send}")
+
             robot.send_action(robot_action_to_send)
 
             # Log data for visualization if enabled

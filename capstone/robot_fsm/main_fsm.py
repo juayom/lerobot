@@ -1,5 +1,4 @@
-# capstone/robot_fsm/main_fsm.py
-
+import os
 import argparse
 import subprocess
 import sys
@@ -17,6 +16,7 @@ from capstone.robot_fsm.config import (
     HANDOVER_INSTRUCTION,
     POLICY_TIMEOUT_S,
     PROJECT_ROOT,
+    LEROBOT_PYTHON,
 )
 
 from capstone.vlm.vlm_checker import VLMChecker
@@ -58,7 +58,7 @@ def run_policy_script(
     timeout_s: int,
 ) -> bool:
     cmd = [
-        sys.executable,
+        str(LEROBOT_PYTHON),
         str(script_path),
         "--instruction",
         instruction,
@@ -68,15 +68,27 @@ def run_policy_script(
         str(timeout_s),
     ]
 
-    print("[FSM] run policy script:")
+    env = {
+        **os.environ,
+        "PYTHONPATH": f"{PROJECT_ROOT / 'src'}:{PROJECT_ROOT}",
+    }
+
+    print("[FSM] run policy script with LeRobot venv:")
     print(" ".join(cmd))
+    print("[FSM] PYTHONPATH =", env["PYTHONPATH"])
 
-    result = subprocess.run(
-        cmd,
-        cwd=str(PROJECT_ROOT),
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            timeout=timeout_s + 10,
+        )
+        return result.returncode == 0
 
-    return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        print(f"[FSM][ERROR] policy timeout after {timeout_s + 10}s")
+        return False
 
 
 def run_grab_policy() -> bool:

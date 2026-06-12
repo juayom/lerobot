@@ -1,0 +1,6 @@
+source;share/sensevoice_stt/hook/pythonpath.ps1
+source;share/sensevoice_stt/hook/pythonpath.dsv
+source;share/sensevoice_stt/hook/pythonpath.sh
+source;share/sensevoice_stt/hook/ament_prefix_path.ps1
+source;share/sensevoice_stt/hook/ament_prefix_path.dsv
+source;share/sensevoice_stt/hook/ament_prefix_path.sh

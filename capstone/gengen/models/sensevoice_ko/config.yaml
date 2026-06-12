@@ -1,0 +1,23 @@
+model_type: SenseVoice
+vocab_size: 25000
+frontend_conf:
+  fs: 16000
+  window: ham_window
+  n_mels: 80
+  frame_length: 25
+  frame_shift: 10
+  lfr_m: 7
+  lfr_n: 6
+encoder_conf:
+  output_size: 512
+  attention_heads: 8
+  linear_units: 2048
+  num_blocks: 12
+  tp_blocks: 0
+  p_blocks: 0
+  x_blocks: 0
+tokenizer_conf:
+  bpemodel: /home/lerobot/gengen/models/sensevoice_ko/chn_jpn_yue_eng_ko_spectok.bpe.model
+infer_conf:
+  beam_size: 1
+  length_penalty: 0.0
