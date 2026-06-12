@@ -1,3 +1,0 @@
-augmentation:
-  mode: environment_only
-  preserve_target_geometry: true

@@ -1,8 +1,15 @@
-# capstone/
+# Capstone Runtime
 
-Project-specific experimental code and preserved side work.
+This directory is reserved for the capstone application that runs alongside
+LeRobot.
 
-- `active_experiments/` — reserved area for active experimental code if more is added later
-- `archive/` — older in-project archives
-- `code_backups/` — backup code snapshots moved out of the way
-- `multi_task/` — current multi-task experimental code
+The deployed system is split across separate runtime workspaces:
+
+- `~/Desktop/serial_bridge.py` handles the Arduino serial bridge.
+- `~/ros2_ws` provides the `depth_nav` detector and robot FSM.
+- `capstone/gengen` provides SenseVoice STT and the dialog controller.
+- `src/lerobot` and `local_policies` provide robot policy inference.
+
+Do not commit generated frames, ROS build products, virtual environments,
+dated backups, or copied source snapshots here. Git history is the backup for
+tracked source code.
