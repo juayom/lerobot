@@ -1,8 +1,12 @@
-# capstone/
+# Capstone Runtime
 
-Project-specific experimental code and preserved side work.
+The deployed application is split across these components:
 
-- `active_experiments/` — reserved area for active experimental code if more is added later
-- `archive/` — older in-project archives
-- `code_backups/` — backup code snapshots moved out of the way
-- `multi_task/` — current multi-task experimental code
+- `gengen/src/sensevoice_stt` provides STT and the dialog controller.
+- `robot_actions` provides the scripted handover motion.
+- `../ros2_ws/src/depth_nav` provides depth detection and the robot FSM.
+- `../src/lerobot` and `../local_policies` provide policy inference.
+
+Build the ROS 2 workspaces locally with `colcon build`. Do not commit generated
+`build/`, `install/`, `log/`, runtime frames, dated backups, or copied source
+snapshots.

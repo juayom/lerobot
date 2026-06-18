@@ -1,4 +1,0 @@
-augmentation:
-  mode: material_only
-  preserve_action: true
-  preserve_layout: true

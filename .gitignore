@@ -167,6 +167,21 @@ wandb/
 data/
 outputs/
 
+# Project-local generated data and retired snapshots
+backups/
+reports/
+capstone/runtime/
+capstone/gengen/build/
+capstone/gengen/install/
+capstone/gengen/log/
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+capstone/**/backup/
+capstone/**/backup_*/
+capstone/**/code_backups/
+capstone/**/archive/
+
 # Translations
 *.mo
 *.pot
